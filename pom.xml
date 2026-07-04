@@ -37,7 +37,6 @@
   </dependencies>
 
   <build>
-    <directory>${java.io.tmpdir}/dungeon_crawler_carl_target</directory>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

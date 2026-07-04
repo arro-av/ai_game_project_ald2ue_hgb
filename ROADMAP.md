@@ -176,6 +176,31 @@ Done when:
 - The battle screen renders party, enemies, HP, floor, menu, and dialogue.
 - Attack selection drives `BattleService`.
 
+### 6B. Tactical Battle UI Flow And Event Pacing
+
+Prepare the battle UI for the final interaction model without blocking gameplay implementation on final art.
+
+Deliverables:
+
+- Battle input state machine for attack selection, attack description, target selection, action resolution, confirmation, and enemy turns.
+- Target selection support for single-target actions instead of always auto-selecting the first legal target.
+- Step-by-step battle event messages so actions do not resolve instantly.
+- Dialogue box support for attack descriptions and battle feedback.
+- Turn preview column showing the next five actors by portrait.
+- Stable HUD regions for party portraits/HP, enemy portraits/HP, dialogue, floor title, and turn preview.
+- Service/controller APIs that expose legal targets and turn preview data without putting rules in the renderer.
+
+Feature brief:
+
+- `FEATURES/FEATURE-06B_TACTICAL_BATTLE_UI_FLOW.md`
+
+Done when:
+
+- Clicking an attack can show its description before it resolves.
+- The player can choose a target for attacks that need one.
+- Battle feedback can be advanced with Enter or click confirmation.
+- The next five turns can be rendered from battle/service state.
+
 ### 7. Player Attacks, Passives, Effects, And Cooldowns
 
 Implement the party identity and simple combat effects.
@@ -197,6 +222,10 @@ Done when:
 - Cooldowns prevent repeated special spam.
 - Effects are visible through HP changes and battle log text.
 - Mongo appears from floor 3 onward.
+
+Depends on:
+
+- `FEATURES/FEATURE-06B_TACTICAL_BATTLE_UI_FLOW.md`
 
 ### 8. Six Encounters And Boss Specials
 
@@ -360,8 +389,9 @@ If final art is not ready, implement colored placeholder sprites or simple gener
 5. Build battle MVP.
 6. Add FSMs.
 7. Add JavaFX menu and battle screen.
-8. Add player effects and cooldowns.
-9. Add all six encounters.
-10. Add end states and highscore save.
-11. Test, balance, and polish.
-12. Produce final documentation.
+8. Add tactical battle input flow, target selection, event pacing, and turn preview.
+9. Add player effects and cooldowns.
+10. Add all six encounters.
+11. Add end states and highscore save.
+12. Test, balance, and polish.
+13. Produce final documentation.

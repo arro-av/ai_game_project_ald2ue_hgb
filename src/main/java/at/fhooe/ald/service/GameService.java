@@ -15,6 +15,8 @@ public class GameService {
     private GameStatus status;
     private int currentFloorNumber;
     private int finalFloorNumber;
+    private int turnsTaken;
+    private boolean currentBattleTurnsRecorded;
     private Battle currentBattle;
 
     public GameService(EncounterService encounterService, FloorDao floorDao) {
@@ -26,6 +28,8 @@ public class GameService {
     public Battle startNewGame() throws SQLException {
         finalFloorNumber = loadFinalFloorNumber();
         currentFloorNumber = 1;
+        turnsTaken = 0;
+        currentBattleTurnsRecorded = false;
         currentBattle = encounterService.createBattle(currentFloorNumber);
         status = GameStatus.IN_BATTLE;
         return currentBattle;
@@ -34,12 +38,14 @@ public class GameService {
     public Battle clearCurrentFloor() throws SQLException {
         requireBattleInProgress();
         currentBattle.markVictory();
+        recordCurrentBattleTurns();
         if (currentFloorNumber >= finalFloorNumber) {
             status = GameStatus.VICTORY;
             return currentBattle;
         }
         currentFloorNumber++;
         currentBattle = encounterService.createBattle(currentFloorNumber);
+        currentBattleTurnsRecorded = false;
         status = GameStatus.IN_BATTLE;
         return currentBattle;
     }
@@ -47,6 +53,7 @@ public class GameService {
     public void markPartyDefeated() {
         requireBattleStarted();
         currentBattle.markDefeat();
+        recordCurrentBattleTurns();
         status = GameStatus.GAME_OVER;
     }
 
@@ -68,6 +75,20 @@ public class GameService {
         return currentFloorNumber;
     }
 
+    public int getFloorsCleared() {
+        if (status == GameStatus.VICTORY) {
+            return finalFloorNumber;
+        }
+        return Math.max(0, currentFloorNumber - 1);
+    }
+
+    public int getTurnsTaken() {
+        if (currentBattle == null || currentBattleTurnsRecorded) {
+            return turnsTaken;
+        }
+        return turnsTaken + currentBattle.getTurnNumber();
+    }
+
     public Optional<Battle> getCurrentBattle() {
         return Optional.ofNullable(currentBattle);
     }
@@ -87,6 +108,13 @@ public class GameService {
                 .map(floor -> floor.getFloorNumber())
                 .max(Comparator.naturalOrder())
                 .orElseThrow(() -> new IllegalStateException("No floors configured"));
+    }
+
+    private void recordCurrentBattleTurns() {
+        if (!currentBattleTurnsRecorded && currentBattle != null) {
+            turnsTaken += currentBattle.getTurnNumber();
+            currentBattleTurnsRecorded = true;
+        }
     }
 
     private void requireBattleStarted() {

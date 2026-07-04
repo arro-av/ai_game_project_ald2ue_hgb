@@ -23,3 +23,4 @@ Make Carl, Donut, and Mongo feel distinct while keeping combat effects simple.
 
 - `FEATURE-04_BATTLE_ENGINE_MVP.md`
 - `FEATURE-06_JAVAFX_MENU_AND_BATTLE_VIEW.md`
+- `FEATURE-06B_TACTICAL_BATTLE_UI_FLOW.md`
