@@ -332,7 +332,7 @@ class AppTest {
         donut.receiveDamage(donut.getMaxHp());
 
         battleService.performEnemyTurn(battle, ralph);
-        ralph.receiveDamage(900);
+        ralph.receiveDamage(1000);
         battleService.performEnemyTurn(battle, ralph);
 
         PlayerCharacter infectedTarget = battle.getAlivePartyMembers().stream()
@@ -486,7 +486,7 @@ class AppTest {
         battle.getAliveEnemies().stream()
                 .filter(enemy -> enemy.getName().equals("Scatterer"))
                 .forEach(enemy -> enemy.receiveDamage(enemy.getCurrentHp()));
-        hoarder.receiveDamage(1000);
+        hoarder.receiveDamage(1100);
 
         battleService.performEnemyTurn(battle, hoarder);
 

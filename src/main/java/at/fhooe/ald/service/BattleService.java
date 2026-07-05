@@ -26,7 +26,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 public class BattleService {
-    private static final int PARTY_DAMAGE_BUFF_PERCENT = 15;
+    private static final int PARTY_DAMAGE_BUFF_PERCENT = 50;
     private static final int STATUS_EFFECT_TICKS = 2;
     private static final int STATUS_TICK_MIN_PERCENT = 20;
     private static final int STATUS_TICK_MAX_PERCENT = 30;
@@ -256,9 +256,7 @@ public class BattleService {
             return;
         }
 
-        DamageOutcome outcome = attack.getName().equals("Rake")
-                ? applyDoubleDamage(battle, actor, attack, actorIsPlayer, selectedTarget)
-                : applyDamage(battle, actor, attack, actorIsPlayer, selectedTarget);
+        DamageOutcome outcome = applyDamage(battle, actor, attack, actorIsPlayer, selectedTarget);
         applyPostDamageEffect(battle, actor, attack, outcome, actorIsPlayer);
     }
 
@@ -333,33 +331,6 @@ public class BattleService {
         return new DamageOutcome(totalAmount, damagedEnemies, targets, damageByTarget);
     }
 
-    private DamageOutcome applyDoubleDamage(Battle battle, Battler actor, Attack attack, boolean actorIsPlayer,
-                                            Targetable selectedTarget) {
-        Targetable fixedTarget = selectedTarget;
-        if (fixedTarget == null && isSingleTargetType(attack.getTargetType())) {
-            List<? extends Targetable> selectedTargets = selectTargetsForAttack(battle, actor, attack, actorIsPlayer,
-                    null);
-            fixedTarget = selectedTargets.isEmpty() ? null : selectedTargets.getFirst();
-        }
-        DamageOutcome firstHit = applyDamage(battle, actor, attack, actorIsPlayer, fixedTarget);
-        if (battle.isFinished()) {
-            return firstHit;
-        }
-        DamageOutcome secondHit = applyDamage(battle, actor, attack, actorIsPlayer, fixedTarget);
-        Map<Targetable, Integer> combinedDamage = new IdentityHashMap<>();
-        firstHit.damageByTarget().forEach(combinedDamage::put);
-        secondHit.damageByTarget().forEach((target, damage) ->
-                combinedDamage.merge(target, damage, Integer::sum));
-        List<Enemy> damagedEnemies = new ArrayList<>(firstHit.damagedEnemies());
-        for (Enemy enemy : secondHit.damagedEnemies()) {
-            if (!damagedEnemies.contains(enemy)) {
-                damagedEnemies.add(enemy);
-            }
-        }
-        return new DamageOutcome(firstHit.totalAmount() + secondHit.totalAmount(),
-                damagedEnemies, firstHit.targets(), combinedDamage);
-    }
-
     private List<? extends Targetable> selectTargetsForAttack(Battle battle, Battler actor, Attack attack,
                                                               boolean actorIsPlayer, Targetable selectedTarget) {
         if (!actorIsPlayer && hasRoyalCharm(battle, actor) && targetsParty(attack.getTargetType())) {
@@ -388,10 +359,6 @@ public class BattleService {
                 || targetType == TargetType.RANDOM_ENEMY
                 || targetType == TargetType.ALL_ENEMIES
                 || targetType == TargetType.LOWEST_HP_ALLY;
-    }
-
-    private boolean isSingleTargetType(TargetType targetType) {
-        return targetType == TargetType.SINGLE_ENEMY || targetType == TargetType.RANDOM_ENEMY;
     }
 
     private void addDamageAnimationTurn(Battle battle, Battler actor, Attack attack, Targetable target, int damage) {
@@ -1063,10 +1030,36 @@ public class BattleService {
 
     private void updateEnemyState(Battle battle, Enemy enemy) {
         if (enemy instanceof BossEnemy bossEnemy) {
-            new BossEnemyStateMachine(bossEnemy).update();
+            Optional<String> transitionMessage = new BossEnemyStateMachine(bossEnemy).update();
+            if (bossEnemy.getName().equals("Hoarder")) {
+                transitionMessage.ifPresent(message -> addHoarderStateTransitionMessage(battle, bossEnemy, message));
+            }
         } else if (enemy instanceof TrashEnemy trashEnemy) {
             new TrashEnemyStateMachine(trashEnemy).update();
         }
+    }
+
+    private void addHoarderStateTransitionMessage(Battle battle, BossEnemy hoarder, String transitionMessage) {
+        String namedTransitionMessage = transitionMessage.replaceFirst("^BossEnemy:", hoarder.getName() + ":");
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                hoarder.getName(),
+                "FSM State Change",
+                hoarder.getName(),
+                0,
+                namedTransitionMessage + System.lineSeparator() + "Unlocked: " + unlockedAttacksForCurrentState(hoarder)
+        ));
+    }
+
+    private String unlockedAttacksForCurrentState(BossEnemy bossEnemy) {
+        List<String> unlockedAttacks = bossEnemy.getAttacks().stream()
+                .filter(attack -> bossEnemy.getState().name().equals(attack.getUnlockState()))
+                .map(Attack::getName)
+                .toList();
+        if (unlockedAttacks.isEmpty()) {
+            return "no new attacks.";
+        }
+        return String.join(", ", unlockedAttacks) + ".";
     }
 
     private void startCooldown(Battler actor, Attack attack) {

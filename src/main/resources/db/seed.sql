@@ -30,12 +30,12 @@ INSERT INTO attacks (id, name, description, min_damage, max_damage, target_type,
 (105, 'Claw Jab', 'Mediocre single-target attack.', 30, 40, 'SINGLE_ENEMY', 'NONE', 0),
 (106, 'Offering', 'Offers itself to the boss.', 0, 0, 'SINGLE_ALLY', 'HEAL', 0),
 (201, 'Rodent Bite', 'Basic single-target boss attack that applies Pestilence.', 60, 90, 'SINGLE_ENEMY', 'INFECTION', 0),
-(202, 'Rake', 'Double physical attack that applies Pestilence.', 100, 130, 'SINGLE_ENEMY', 'INFECTION', 0),
+(202, 'Rake', 'Strong physical attack that applies Pestilence.', 100, 130, 'SINGLE_ENEMY', 'INFECTION', 0),
 (301, 'Bear Maul', 'Strong single-target physical attack.', 0, 110, 'ALL_ENEMIES', 'BLEED', 0),
 (302, 'Roller Skate Charge', 'High-damage attack with stun chance.', 120, 160, 'SINGLE_ENEMY', 'STUN', 1),
 (303, 'Hibernate', 'Reduces damage and heals for two turns.', 0, 0, 'SELF', 'HEAL', 3),
 (401, 'Slash', 'Aggressive attack that can leave bleeding.', 100, 120, 'SINGLE_ENEMY', 'BLEED', 0),
-(402, 'Meat Hook', 'Heavy attack against the lowest HP party member.', 160, 200, 'LOWEST_HP_ALLY', 'BLEED', 1),
+(402, 'Meat Hook', 'Heavy attack against the lowest HP party member.', 120, 150, 'LOWEST_HP_ALLY', 'BLEED', 1),
 (403, 'Summon Gruul', 'Two-turn final phase countdown.', 0, 0, 'ALL_ENEMIES', 'NONE', 0),
 (501, 'Goose Bite', 'Fast single-target physical attack.', 60, 90, 'SINGLE_ENEMY', 'NONE', 0),
 (502, 'Mother''s Honk', 'AoE attack that lowers party damage.', 30, 50, 'ALL_ENEMIES', 'DEBUFF_DEFENSE', 1),
@@ -52,13 +52,13 @@ INSERT INTO character_attacks (character_id, attack_id, slot) VALUES
 (3, 7, 1), (3, 8, 2), (3, 9, 3);
 
 INSERT INTO enemies (id, name, enemy_type, max_hp, speed, sprite_path, passive_name, passive_description) VALUES
-(1, 'Hoarder', 'BOSS', 1400, 20, '/assets/sprites/bosses/hoarder_idle.png', 'Greedy Bulk', 'Takes less damage for each Scatterer alive.'),
+(1, 'Hoarder', 'BOSS', 1500, 20, '/assets/sprites/bosses/hoarder_idle.png', 'Greedy Bulk', 'Takes less damage for each Scatterer alive.'),
 (2, 'Scatterer', 'TRASH', 100, 40, '/assets/sprites/enemies/scatterer_idle.png', 'None', ''),
-(3, 'Ralph', 'BOSS', 1200, 60, '/assets/sprites/bosses/ralph_idle.png', 'Pestilence', 'Direct attacks poison the target. In final phase this becomes Lethal Infection.'),
-(4, 'Heather', 'BOSS', 2400, 40, '/assets/sprites/bosses/heather_idle.png', 'Acceleration', 'Missing HP makes her faster and stronger.'),
-(5, 'Gore-Gore', 'BOSS', 2600, 30, '/assets/sprites/bosses/gore_gore_idle.png', 'Blood Frenzy', 'Deals more damage to bleeding targets.'),
-(6, 'Denise', 'BOSS', 1800, 40, '/assets/sprites/bosses/denise_idle.png', 'Nothing-Touched Mother', 'Reduces incoming magic damage.'),
-(7, 'Circe', 'BOSS', 3000, 70, '/assets/sprites/bosses/circe_idle.png', 'Brood Mother', 'Spawns a Mantis Nymph at the start of her turns.'),
+(3, 'Ralph', 'BOSS', 1300, 60, '/assets/sprites/bosses/ralph_idle.png', 'Pestilence', 'Direct attacks poison the target. In final phase this becomes Lethal Infection.'),
+(4, 'Heather', 'BOSS', 2000, 40, '/assets/sprites/bosses/heather_idle.png', 'Acceleration', 'Missing HP makes her faster and stronger.'),
+(5, 'Gore-Gore', 'BOSS', 2100, 30, '/assets/sprites/bosses/gore_gore_idle.png', 'Blood Frenzy', 'Deals more damage to bleeding targets.'),
+(6, 'Denise', 'BOSS', 1600, 40, '/assets/sprites/bosses/denise_idle.png', 'Nothing-Touched Mother', 'Reduces incoming magic damage.'),
+(7, 'Circe', 'BOSS', 2400, 70, '/assets/sprites/bosses/circe_idle.png', 'Brood Mother', 'Spawns a Mantis Nymph at the start of her turns.'),
 (8, 'Mantis Nymph', 'TRASH', 120, 60, '/assets/sprites/enemies/mantis_nymph_idle.png', 'Fresh Hatchling', 'Low HP add spawned by Circe.');
 
 INSERT INTO enemy_attacks (enemy_id, attack_id, slot, unlock_state) VALUES

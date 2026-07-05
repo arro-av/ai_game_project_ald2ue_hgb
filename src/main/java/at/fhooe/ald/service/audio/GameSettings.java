@@ -8,8 +8,8 @@ public class GameSettings {
     private final DoubleProperty sfxVolume;
 
     public GameSettings() {
-        this.musicVolume = new SimpleDoubleProperty(0.03);
-        this.sfxVolume = new SimpleDoubleProperty(0.40);
+        this.musicVolume = new SimpleDoubleProperty(0.05);
+        this.sfxVolume = new SimpleDoubleProperty(0.50);
     }
 
     public DoubleProperty musicVolumeProperty() {

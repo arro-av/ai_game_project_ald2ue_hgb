@@ -31,8 +31,8 @@ public final class AudioConfig {
             Map.entry(AudioCue.EXPLODE, 0.6),
             Map.entry(AudioCue.FIREBALL, 0.7),
             Map.entry(AudioCue.MAGIC_MISSILE, 0.6),
-            Map.entry(AudioCue.PHYSICAL_HIT, 0.60),
-            Map.entry(AudioCue.SLASH, 0.5)
+            Map.entry(AudioCue.PHYSICAL_HIT, 0.55),
+            Map.entry(AudioCue.SLASH, 0.35)
     );
 
     public static final Map<String, AudioCue> ACTION_CUES = Map.ofEntries(
