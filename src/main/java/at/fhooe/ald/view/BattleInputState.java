@@ -1,6 +1,7 @@
 package at.fhooe.ald.view;
 
 public enum BattleInputState {
+    INTRO_SEQUENCE,
     SELECT_ATTACK,
     SHOW_ATTACK_DESCRIPTION,
     SELECT_TARGET,

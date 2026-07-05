@@ -5,13 +5,17 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.HexFormat;
 
 public class DatabaseInitializer {
-    private static final String DB_RESOURCE = "/db/game.db";
     private static final String SCHEMA_RESOURCE = "/db/schema.sql";
     private static final String SEED_RESOURCE = "/db/seed.sql";
+    private static final String SOURCE_HASH_KEY = "source_hash";
 
     private final Path databasePath;
 
@@ -25,8 +29,12 @@ public class DatabaseInitializer {
 
     public Database initialize() throws IOException, SQLException {
         Files.createDirectories(databasePath.getParent());
+        String sourceHash = databaseSourceHash();
         if (Files.notExists(databasePath)) {
-            copyBundledDatabaseOrCreateFromScripts();
+            createDatabaseFromScripts(sourceHash);
+        } else if (!databaseMatchesSourceHash(sourceHash)) {
+            Files.delete(databasePath);
+            createDatabaseFromScripts(sourceHash);
         }
         return new Database(databasePath);
     }
@@ -35,19 +43,48 @@ public class DatabaseInitializer {
         return databasePath;
     }
 
-    private void copyBundledDatabaseOrCreateFromScripts() throws IOException, SQLException {
-        try (InputStream inputStream = DatabaseInitializer.class.getResourceAsStream(DB_RESOURCE)) {
-            if (inputStream != null) {
-                Files.copy(inputStream, databasePath);
-                return;
-            }
-        }
-
+    private void createDatabaseFromScripts(String sourceHash) throws IOException, SQLException {
         Database database = new Database(databasePath);
         try (var connection = database.getConnection()) {
             executeScript(connection.createStatement(), readResource(SCHEMA_RESOURCE));
             executeScript(connection.createStatement(), readResource(SEED_RESOURCE));
+            writeSourceHash(connection, sourceHash);
         }
+    }
+
+    private boolean databaseMatchesSourceHash(String sourceHash) throws SQLException {
+        Database database = new Database(databasePath);
+        try (var connection = database.getConnection();
+             var statement = connection.createStatement()) {
+            ensureMetadataTable(statement);
+            try (var preparedStatement = connection.prepareStatement(
+                    "SELECT value FROM db_metadata WHERE key = ?")) {
+                preparedStatement.setString(1, SOURCE_HASH_KEY);
+                var resultSet = preparedStatement.executeQuery();
+                return resultSet.next() && sourceHash.equals(resultSet.getString("value"));
+            }
+        }
+    }
+
+    private void writeSourceHash(Connection connection, String sourceHash) throws SQLException {
+        try (var statement = connection.createStatement()) {
+            ensureMetadataTable(statement);
+        }
+        try (var preparedStatement = connection.prepareStatement(
+                "INSERT OR REPLACE INTO db_metadata (key, value) VALUES (?, ?)")) {
+            preparedStatement.setString(1, SOURCE_HASH_KEY);
+            preparedStatement.setString(2, sourceHash);
+            preparedStatement.executeUpdate();
+        }
+    }
+
+    private void ensureMetadataTable(Statement statement) throws SQLException {
+        statement.execute("""
+                CREATE TABLE IF NOT EXISTS db_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """);
     }
 
     private String readResource(String resourcePath) throws IOException {
@@ -56,6 +93,22 @@ public class DatabaseInitializer {
                 throw new IOException("Missing resource: " + resourcePath);
             }
             return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private String databaseSourceHash() throws IOException {
+        MessageDigest digest = sha256();
+        digest.update(readResource(SCHEMA_RESOURCE).getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) '\n');
+        digest.update(readResource(SEED_RESOURCE).getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is not available", exception);
         }
     }
 

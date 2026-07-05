@@ -21,7 +21,6 @@ import at.fhooe.ald.view.GameOverView;
 import at.fhooe.ald.view.MainMenuView;
 import at.fhooe.ald.view.VictoryView;
 import at.fhooe.ald.view.render.BattleRenderer;
-import at.fhooe.ald.view.render.DialogueBoxRenderer;
 import at.fhooe.ald.view.render.HudRenderer;
 import at.fhooe.ald.view.render.SpriteLoader;
 import javafx.application.Application;
@@ -31,6 +30,9 @@ import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 
 public class App extends Application {
+    private static final double SCENE_WIDTH = 1280;
+    private static final double SCENE_HEIGHT = 720;
+
     private Stage stage;
     private GameController gameController;
     private BattleService battleService;
@@ -61,11 +63,11 @@ public class App extends Application {
 
         gameController = new GameController(gameService, highScoreService);
         battleService = new BattleService(new DamageCalculator(), new TargetSelector());
-        battleRenderer = new BattleRenderer(new SpriteLoader(), new HudRenderer(), new DialogueBoxRenderer());
+        battleRenderer = new BattleRenderer(new SpriteLoader(), new HudRenderer());
     }
 
     private void showMainMenu() {
-        stage.setScene(new Scene(new MainMenuView(this::startGame), 960, 540));
+        stage.setScene(new Scene(new MainMenuView(this::startGame), SCENE_WIDTH, SCENE_HEIGHT));
     }
 
     private void startGame() {
@@ -78,12 +80,12 @@ public class App extends Application {
                     battle,
                     this::showVictory,
                     this::showGameOver
-            ), 960, 540));
+            ), SCENE_WIDTH, SCENE_HEIGHT));
         } catch (Exception exception) {
             Label error = new Label("Could not start game: " + exception.getMessage());
             StackPane root = new StackPane(error);
             root.setStyle("-fx-background-color: #20242a; -fx-text-fill: #f2eedc;");
-            stage.setScene(new Scene(root, 960, 540));
+            stage.setScene(new Scene(root, SCENE_WIDTH, SCENE_HEIGHT));
         }
     }
 
@@ -93,7 +95,7 @@ public class App extends Application {
                 gameController.getFloorsCleared(),
                 gameController.getTurnsTaken(),
                 this::showMainMenu
-        ), 960, 540));
+        ), SCENE_WIDTH, SCENE_HEIGHT));
     }
 
     private void showGameOver() {
@@ -102,7 +104,7 @@ public class App extends Application {
                 gameController.getFloorsCleared(),
                 gameController.getTurnsTaken(),
                 this::showMainMenu
-        ), 960, 540));
+        ), SCENE_WIDTH, SCENE_HEIGHT));
     }
 
     private void saveRunResult() {

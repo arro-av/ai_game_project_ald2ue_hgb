@@ -12,41 +12,51 @@ import at.fhooe.ald.model.PlayerCharacter;
 import at.fhooe.ald.model.TargetType;
 import at.fhooe.ald.model.Targetable;
 import at.fhooe.ald.model.TrashEnemy;
+import at.fhooe.ald.model.fsm.BossEnemyState;
+import at.fhooe.ald.model.fsm.TrashEnemyState;
 import at.fhooe.ald.model.fsm.BossEnemyStateMachine;
 import at.fhooe.ald.model.fsm.TrashEnemyStateMachine;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 public class BattleService {
     private static final int PARTY_DAMAGE_BUFF_PERCENT = 15;
-    private static final int BURN_DAMAGE = 30;
-    private static final int BLEED_DAMAGE = 25;
-    private static final int INFECTION_DAMAGE = 35;
+    private static final int STATUS_EFFECT_TICKS = 2;
+    private static final int STATUS_TICK_MIN_PERCENT = 20;
+    private static final int STATUS_TICK_MAX_PERCENT = 30;
+    private static final int HEALING_OVER_TIME_TICKS = 2;
     private static final int MAX_SCATTERERS = 4;
-    private static final int MAX_NYMPHS = 6;
+    private static final int MAX_NYMPHS = 4;
 
     private final DamageCalculator damageCalculator;
     private final TargetSelector targetSelector;
     private final Map<Battler, Map<Integer, Integer>> cooldowns;
-    private final Map<Battle, Integer> partyShieldCharges;
+    private final Map<Battle, Battler> partyShieldSources;
     private final Map<Battle, Integer> partyDamageBuffCharges;
     private final Map<Battle, Integer> partyDamageDebuffCharges;
     private final Map<Battle, Integer> nymphDamageBoostCharges;
     private final Map<Battle, Integer> gruulCountdowns;
-    private final Map<Battle, Map<Battler, StatusEffectState>> statusEffects;
+    private final Map<Battle, Integer> donutTurnCounts;
+    private final Map<Battle, Enemy> donutCharmTargets;
+    private final Map<Battle, Map<Battler, List<StatusEffectState>>> statusEffects;
 
     public BattleService(DamageCalculator damageCalculator, TargetSelector targetSelector) {
         this.damageCalculator = damageCalculator;
         this.targetSelector = targetSelector;
         this.cooldowns = new HashMap<>();
-        this.partyShieldCharges = new HashMap<>();
+        this.partyShieldSources = new HashMap<>();
         this.partyDamageBuffCharges = new HashMap<>();
         this.partyDamageDebuffCharges = new HashMap<>();
         this.nymphDamageBoostCharges = new HashMap<>();
         this.gruulCountdowns = new HashMap<>();
+        this.donutTurnCounts = new HashMap<>();
+        this.donutCharmTargets = new HashMap<>();
         this.statusEffects = new HashMap<>();
     }
 
@@ -58,16 +68,31 @@ public class BattleService {
         requireInProgress(battle);
         requireAlive(actor);
         requireKnownAttack(actor, attack);
+        if (hasStatus(battle, actor, "Stun")) {
+            boolean turnSkipped = applyStartOfTurnEffects(battle, actor);
+            if (battle.isFinished() || !actor.isAlive() || turnSkipped) {
+                if (turnSkipped) {
+                    tickCooldowns(actor);
+                }
+                battle.advanceTurn();
+                return battle.getResult();
+            }
+        }
         requireReady(actor, attack);
         requireLegalTarget(battle, attack, true, selectedTarget);
-        applyStartOfTurnEffects(battle, actor);
+        boolean turnSkipped = applyStartOfTurnEffects(battle, actor);
         if (battle.isFinished() || !actor.isAlive()) {
+            battle.advanceTurn();
+            return battle.getResult();
+        }
+        if (turnSkipped) {
+            tickCooldowns(actor);
             battle.advanceTurn();
             return battle.getResult();
         }
 
         applyAttack(battle, actor, attack, true, selectedTarget);
-        tickCooldowns(battle);
+        tickCooldowns(actor);
         startCooldown(actor, attack);
         updateBattleResult(battle);
         battle.advanceTurn();
@@ -77,14 +102,31 @@ public class BattleService {
     public BattleResult performEnemyTurn(Battle battle, Enemy actor) {
         requireInProgress(battle);
         requireAlive(actor);
-        applyStartOfTurnEffects(battle, actor);
+        applyNonStatusStartOfTurnEffects(battle, actor);
+        updateEnemyState(battle, actor);
+        applyRalphLethalInfectionKills(battle, actor);
+        if (battle.isFinished()) {
+            battle.advanceTurn();
+            return battle.getResult();
+        }
+        applyEnemyStartOfTurnSpecials(battle, actor);
+        applyStatusTicks(battle, actor);
         if (battle.isFinished() || !actor.isAlive()) {
             battle.advanceTurn();
             return battle.getResult();
         }
-        updateEnemyState(battle, actor);
-        applyEnemyStartOfTurnSpecials(battle, actor);
-        Optional<Attack> selectedAttack = chooseFirstReadyAttack(actor);
+        if (consumeStunIfPresent(battle, actor)) {
+            expireRoyalCharmAfterEnemyTurn(battle, actor);
+            tickCooldowns(actor);
+            updateBattleResult(battle);
+            battle.advanceTurn();
+            return battle.getResult();
+        }
+        if (advanceGruulRitualIfNeeded(battle, actor)) {
+            battle.advanceTurn();
+            return battle.getResult();
+        }
+        Optional<Attack> selectedAttack = chooseFirstReadyAttack(battle, actor);
         if (selectedAttack.isEmpty()) {
             battle.addTurn(new BattleTurn(
                     battle.getTurnNumber(),
@@ -94,14 +136,16 @@ public class BattleService {
                     0,
                     actor.getName() + " waits for an opening."
             ));
-            tickCooldowns(battle);
+            expireRoyalCharmAfterEnemyTurn(battle, actor);
+            tickCooldowns(actor);
             updateBattleResult(battle);
             battle.advanceTurn();
             return battle.getResult();
         }
         Attack attack = selectedAttack.get();
         applyAttack(battle, actor, attack, false, null);
-        tickCooldowns(battle);
+        expireRoyalCharmAfterEnemyTurn(battle, actor);
+        tickCooldowns(actor);
         startCooldown(actor, attack);
         updateBattleResult(battle);
         battle.advanceTurn();
@@ -120,6 +164,26 @@ public class BattleService {
         return getRemainingCooldown(actor, attack) == 0;
     }
 
+    public boolean hasPartyProtection(Battle battle) {
+        return hasPartyShield(battle);
+    }
+
+    public boolean hasPartyDamageBoost(Battle battle) {
+        return partyDamageBuffCharges.getOrDefault(battle, 0) > 0;
+    }
+
+    public boolean hasNymphDamageBoost(Battle battle) {
+        return nymphDamageBoostCharges.getOrDefault(battle, 0) > 0;
+    }
+
+    public boolean hasStatusEffect(Battle battle, Battler battler, String statusName) {
+        return hasStatus(battle, battler, statusName);
+    }
+
+    public boolean hasRoyalCharm(Battle battle, Battler battler) {
+        return battler instanceof Enemy && donutCharmTargets.get(battle) == battler;
+    }
+
     public List<? extends Targetable> getLegalTargets(Battle battle, Attack attack, boolean actorIsPlayer) {
         return targetSelector.getLegalTargets(battle, attack.getTargetType(), actorIsPlayer);
     }
@@ -133,8 +197,10 @@ public class BattleService {
         if (turnOrder.isEmpty() || count <= 0) {
             return List.of();
         }
+        Battler currentActor = battle.getCurrentActor().orElse(turnOrder.getFirst());
+        int currentIndex = Math.max(0, turnOrder.indexOf(currentActor));
         return IntStream.range(0, count)
-                .mapToObj(index -> turnOrder.get(index % turnOrder.size()))
+                .mapToObj(index -> turnOrder.get((currentIndex + index) % turnOrder.size()))
                 .toList();
     }
 
@@ -186,19 +252,32 @@ public class BattleService {
             return;
         }
         if (attack.getEffect() == AttackEffect.HEAL && attack.getTargetType() != TargetType.SINGLE_ENEMY) {
-            applyHealing(battle, actor, attack, actorIsPlayer);
+            applyHealing(battle, actor, attack, actorIsPlayer, selectedTarget);
             return;
         }
 
-        DamageOutcome outcome = applyDamage(battle, actor, attack, actorIsPlayer, selectedTarget);
+        DamageOutcome outcome = attack.getName().equals("Rake")
+                ? applyDoubleDamage(battle, actor, attack, actorIsPlayer, selectedTarget)
+                : applyDamage(battle, actor, attack, actorIsPlayer, selectedTarget);
         applyPostDamageEffect(battle, actor, attack, outcome, actorIsPlayer);
     }
 
     private DamageOutcome applyDamage(Battle battle, Battler actor, Attack attack, boolean actorIsPlayer,
                                       Targetable selectedTarget) {
-        List<? extends Targetable> targets = targetSelector.selectTargets(battle, attack.getTargetType(),
-                actorIsPlayer, selectedTarget);
+        List<? extends Targetable> targets = selectTargetsForAttack(battle, actor, attack, actorIsPlayer,
+                selectedTarget);
         String targetLabel = targetLabel(targets);
+        if (targets.isEmpty()) {
+            battle.addTurn(new BattleTurn(
+                    battle.getTurnNumber(),
+                    actor.getName(),
+                    attack.getName(),
+                    "",
+                    0,
+                    actor.getName() + " cannot find a valid target."
+            ));
+            return new DamageOutcome(0, List.of(), targets, Map.of());
+        }
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),
                 actor.getName(),
@@ -209,6 +288,7 @@ public class BattleService {
         ));
         int totalAmount = 0;
         List<Enemy> damagedEnemies = new java.util.ArrayList<>();
+        Map<Targetable, Integer> damageByTarget = new IdentityHashMap<>();
         boolean partyShielded = !actorIsPlayer && targets.stream().anyMatch(PlayerCharacter.class::isInstance)
                 && hasPartyShield(battle);
         for (Targetable target : targets) {
@@ -216,12 +296,13 @@ public class BattleService {
             damage = applyDamageModifiers(battle, actor, attack, target, damage, actorIsPlayer);
             target.receiveDamage(damage);
             totalAmount += damage;
+            damageByTarget.put(target, damage);
+            addDamageAnimationTurn(battle, actor, attack, target, damage);
             if (target instanceof Enemy enemy) {
                 damagedEnemies.add(enemy);
             }
         }
         if (partyShielded) {
-            consumePartyShield(battle);
             battle.addTurn(new BattleTurn(
                     battle.getTurnNumber(),
                     actor.getName(),
@@ -245,23 +326,106 @@ public class BattleService {
                 attack.getName(),
                 targetLabel,
                 totalAmount,
-                actor.getName() + " used " + attack.getName() + " for " + totalAmount + " damage."
+                actor.getName() + " used " + attack.getName() + System.lineSeparator()
+                        + totalAmount + " damage."
         ));
         damagedEnemies.forEach(enemy -> updateEnemyState(battle, enemy));
-        return new DamageOutcome(totalAmount, damagedEnemies, targets);
+        return new DamageOutcome(totalAmount, damagedEnemies, targets, damageByTarget);
     }
 
-    private void applyHealing(Battle battle, Battler actor, Attack attack, boolean actorIsPlayer) {
+    private DamageOutcome applyDoubleDamage(Battle battle, Battler actor, Attack attack, boolean actorIsPlayer,
+                                            Targetable selectedTarget) {
+        Targetable fixedTarget = selectedTarget;
+        if (fixedTarget == null && isSingleTargetType(attack.getTargetType())) {
+            List<? extends Targetable> selectedTargets = selectTargetsForAttack(battle, actor, attack, actorIsPlayer,
+                    null);
+            fixedTarget = selectedTargets.isEmpty() ? null : selectedTargets.getFirst();
+        }
+        DamageOutcome firstHit = applyDamage(battle, actor, attack, actorIsPlayer, fixedTarget);
+        if (battle.isFinished()) {
+            return firstHit;
+        }
+        DamageOutcome secondHit = applyDamage(battle, actor, attack, actorIsPlayer, fixedTarget);
+        Map<Targetable, Integer> combinedDamage = new IdentityHashMap<>();
+        firstHit.damageByTarget().forEach(combinedDamage::put);
+        secondHit.damageByTarget().forEach((target, damage) ->
+                combinedDamage.merge(target, damage, Integer::sum));
+        List<Enemy> damagedEnemies = new ArrayList<>(firstHit.damagedEnemies());
+        for (Enemy enemy : secondHit.damagedEnemies()) {
+            if (!damagedEnemies.contains(enemy)) {
+                damagedEnemies.add(enemy);
+            }
+        }
+        return new DamageOutcome(firstHit.totalAmount() + secondHit.totalAmount(),
+                damagedEnemies, firstHit.targets(), combinedDamage);
+    }
+
+    private List<? extends Targetable> selectTargetsForAttack(Battle battle, Battler actor, Attack attack,
+                                                              boolean actorIsPlayer, Targetable selectedTarget) {
+        if (!actorIsPlayer && hasRoyalCharm(battle, actor) && targetsParty(attack.getTargetType())) {
+            List<Targetable> legalTargets = new ArrayList<>(battle.getAlivePartyMembers().stream()
+                    .filter(character -> !character.getName().equals("Donut"))
+                    .toList());
+            if (legalTargets.isEmpty()) {
+                return List.of();
+            }
+            return switch (attack.getTargetType()) {
+                case ALL_ENEMIES -> legalTargets;
+                case LOWEST_HP_ALLY -> List.of(legalTargets.stream()
+                        .min((first, second) -> Integer.compare(first.getCurrentHp(), second.getCurrentHp()))
+                        .orElseThrow());
+                case SINGLE_ENEMY, RANDOM_ENEMY -> List.of(legalTargets.get(
+                        ThreadLocalRandom.current().nextInt(legalTargets.size())));
+                default -> targetSelector.selectTargets(battle, attack.getTargetType(), actorIsPlayer,
+                        selectedTarget);
+            };
+        }
+        return targetSelector.selectTargets(battle, attack.getTargetType(), actorIsPlayer, selectedTarget);
+    }
+
+    private boolean targetsParty(TargetType targetType) {
+        return targetType == TargetType.SINGLE_ENEMY
+                || targetType == TargetType.RANDOM_ENEMY
+                || targetType == TargetType.ALL_ENEMIES
+                || targetType == TargetType.LOWEST_HP_ALLY;
+    }
+
+    private boolean isSingleTargetType(TargetType targetType) {
+        return targetType == TargetType.SINGLE_ENEMY || targetType == TargetType.RANDOM_ENEMY;
+    }
+
+    private void addDamageAnimationTurn(Battle battle, Battler actor, Attack attack, Targetable target, int damage) {
+        if (damage <= 0 || !(target instanceof Battler battler)) {
+            return;
+        }
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                actor.getName(),
+                attack.getName(),
+                battler.getName(),
+                damage,
+                ""
+        ));
+    }
+
+    private void applyHealing(Battle battle, Battler actor, Attack attack, boolean actorIsPlayer,
+                              Targetable selectedTarget) {
         List<? extends Targetable> targets = attack.getTargetType() == TargetType.SELF
                 ? List.of(actor)
                 : targetSelector.selectTargets(battle, attack.getTargetType(), actorIsPlayer);
         int totalAmount = 0;
+        Map<Targetable, Integer> healingByTarget = new IdentityHashMap<>();
         for (Targetable target : targets) {
             int healing = damageCalculator.rollDamage(attack);
             if (target instanceof Battler battler) {
                 battler.heal(healing);
             }
+            healingByTarget.put(target, healing);
             totalAmount += healing;
+        }
+        if (actorIsPlayer && attack.getName().equals("Healing Song")) {
+            Targetable hotTarget = selectedTarget == null ? actor : selectedTarget;
+            applyHealingSongTargetBonus(battle, actor, attack, hotTarget, healingByTarget.getOrDefault(hotTarget, 0));
         }
 
         battle.addTurn(new BattleTurn(
@@ -270,19 +434,21 @@ public class BattleService {
                 attack.getName(),
                 targetLabel(targets),
                 totalAmount,
-                actor.getName() + " used " + attack.getName() + " for " + totalAmount + " healing."
+                actor.getName() + " used " + attack.getName() + System.lineSeparator()
+                        + totalAmount + " healing."
         ));
     }
 
     private void applyPartyShield(Battle battle, Battler actor, Attack attack) {
-        partyShieldCharges.put(battle, 1);
+        partyShieldSources.put(battle, actor);
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),
                 actor.getName(),
                 attack.getName(),
                 "Party",
                 0,
-                actor.getName() + " used " + attack.getName() + ". The party is protected from the next enemy attack."
+                actor.getName() + " used " + attack.getName()
+                        + ". The party is protected until " + actor.getName() + "'s next turn."
         ));
     }
 
@@ -303,10 +469,10 @@ public class BattleService {
                                        boolean actorIsPlayer) {
         switch (attack.getEffect()) {
             case HEAL -> healActorAfterDamage(battle, actor, attack);
-            case BURN -> applyStatusToTargets(battle, actor, attack, outcome.targets(), "Burn", BURN_DAMAGE, 1);
-            case BLEED -> applyStatusToTargets(battle, actor, attack, outcome.targets(), "Bleed", BLEED_DAMAGE, 2);
-            case INFECTION -> applyStatusToTargets(battle, actor, attack, outcome.targets(), "Infection",
-                    INFECTION_DAMAGE, 2);
+            case BURN -> applyStatusToTargets(battle, actor, attack, outcome, "Burn");
+            case BLEED -> applyStatusToTargets(battle, actor, attack, outcome, "Bleed");
+            case INFECTION -> applyInfectionEffect(battle, actor, attack, outcome);
+            case STUN -> applyStunToTargets(battle, actor, attack, outcome);
             case DEBUFF_DEFENSE -> applyPartyDamageDebuff(battle, actor, attack);
             default -> {
             }
@@ -333,12 +499,18 @@ public class BattleService {
     }
 
     private void applyStatusToTargets(Battle battle, Battler actor, Attack attack,
-                                      List<? extends Targetable> targets, String effectName,
-                                      int damage, int turns) {
-        Map<Battler, StatusEffectState> battleEffects = statusEffects.computeIfAbsent(battle, ignored -> new HashMap<>());
-        for (Targetable target : targets) {
+                                      DamageOutcome outcome, String effectName) {
+        Map<Battler, List<StatusEffectState>> battleEffects =
+                statusEffects.computeIfAbsent(battle, ignored -> new HashMap<>());
+        for (Targetable target : outcome.targets()) {
+            int triggeringDamage = outcome.damageFor(target);
             if (target instanceof Battler battler && battler.isAlive()) {
-                battleEffects.put(battler, new StatusEffectState(effectName, damage, turns));
+                List<StatusEffectState> effects = battleEffects.computeIfAbsent(battler, ignored -> new ArrayList<>());
+                effects.removeIf(effect -> effect.name().equals(effectName));
+                if (triggeringDamage <= 0) {
+                    continue;
+                }
+                effects.add(StatusEffectState.damage(effectName, triggeringDamage, STATUS_EFFECT_TICKS));
                 battle.addTurn(new BattleTurn(
                         battle.getTurnNumber(),
                         actor.getName(),
@@ -351,8 +523,134 @@ public class BattleService {
         }
     }
 
+    private void applyStunToTargets(Battle battle, Battler actor, Attack attack, DamageOutcome outcome) {
+        Map<Battler, List<StatusEffectState>> battleEffects =
+                statusEffects.computeIfAbsent(battle, ignored -> new HashMap<>());
+        for (Targetable target : outcome.targets()) {
+            if (!(target instanceof Battler battler) || !battler.isAlive() || outcome.damageFor(target) <= 0) {
+                continue;
+            }
+            if (attack.getName().equals("Roller Skate Charge") && ThreadLocalRandom.current().nextBoolean()) {
+                continue;
+            }
+            List<StatusEffectState> effects = battleEffects.computeIfAbsent(battler, ignored -> new ArrayList<>());
+            effects.removeIf(effect -> effect.name().equals("Stun"));
+            effects.add(StatusEffectState.stun());
+            battle.addTurn(new BattleTurn(
+                    battle.getTurnNumber(),
+                    actor.getName(),
+                    attack.getName(),
+                    battler.getName(),
+                    0,
+                    battler.getName() + " is stunned and will miss the next turn."
+            ));
+        }
+    }
+
+    private void applyLethalInfectionToTargets(Battle battle, Battler actor, Attack attack, DamageOutcome outcome) {
+        Map<Battler, List<StatusEffectState>> battleEffects =
+                statusEffects.computeIfAbsent(battle, ignored -> new HashMap<>());
+        for (Targetable target : outcome.targets()) {
+            if (target instanceof Battler battler && battler.isAlive() && outcome.damageFor(target) > 0) {
+                List<StatusEffectState> effects = battleEffects.computeIfAbsent(battler, ignored -> new ArrayList<>());
+                effects.removeIf(effect -> effect.name().equals("Lethal Infection"));
+                effects.add(StatusEffectState.lethalInfection());
+                battle.addTurn(new BattleTurn(
+                        battle.getTurnNumber(),
+                        actor.getName(),
+                        attack.getName(),
+                        battler.getName(),
+                        0,
+                        battler.getName() + " is affected by Lethal Infection."
+                ));
+            }
+        }
+    }
+
+    private void applyInfectionEffect(Battle battle, Battler actor, Attack attack, DamageOutcome outcome) {
+        if (actor instanceof BossEnemy bossEnemy
+                && bossEnemy.getName().equals("Ralph")
+                && bossEnemy.getState() == BossEnemyState.FINAL_PHASE) {
+            applyLethalInfectionToTargets(battle, actor, attack, outcome);
+            return;
+        }
+        applyStatusToTargets(battle, actor, attack, outcome, "Infection");
+    }
+
+    private void applyRalphLethalInfectionKills(Battle battle, Enemy actor) {
+        if (!(actor instanceof BossEnemy bossEnemy)
+                || !bossEnemy.getName().equals("Ralph")
+                || bossEnemy.getState() != BossEnemyState.FINAL_PHASE) {
+            return;
+        }
+        Map<Battler, List<StatusEffectState>> battleEffects = statusEffects.get(battle);
+        if (battleEffects == null) {
+            return;
+        }
+        for (var entry : List.copyOf(battleEffects.entrySet())) {
+            Battler battler = entry.getKey();
+            List<StatusEffectState> effects = entry.getValue();
+            boolean lethal = effects.stream().anyMatch(effect -> effect.name().equals("Lethal Infection"));
+            if (!lethal || !battler.isAlive()) {
+                continue;
+            }
+            int damage = battler.getCurrentHp();
+            battler.receiveDamage(damage);
+            effects.removeIf(effect -> effect.name().equals("Lethal Infection"));
+            if (effects.isEmpty()) {
+                battleEffects.remove(battler);
+            }
+            battle.addTurn(new BattleTurn(
+                    battle.getTurnNumber(),
+                    actor.getName(),
+                    "Lethal Infection",
+                    battler.getName(),
+                    damage,
+                    battler.getName() + " is killed by Lethal Infection."
+            ));
+        }
+        updateBattleResult(battle);
+    }
+
+    private void applyHealingSongTargetBonus(Battle battle, Battler actor, Attack attack, Targetable target,
+                                             int triggeringHealing) {
+        if (!(target instanceof Battler battler) || triggeringHealing <= 0) {
+            return;
+        }
+        dispelNegativeEffects(battle, battler);
+        Map<Battler, List<StatusEffectState>> battleEffects =
+                statusEffects.computeIfAbsent(battle, ignored -> new HashMap<>());
+        List<StatusEffectState> effects = battleEffects.computeIfAbsent(battler, ignored -> new ArrayList<>());
+        effects.removeIf(effect -> effect.name().equals("Healing Song"));
+        effects.add(StatusEffectState.healing("Healing Song", triggeringHealing, HEALING_OVER_TIME_TICKS));
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                actor.getName(),
+                attack.getName(),
+                battler.getName(),
+                0,
+                battler.getName() + " is cleansed and receives Healing Song over time."
+        ));
+    }
+
+    private void dispelNegativeEffects(Battle battle, Battler battler) {
+        Map<Battler, List<StatusEffectState>> battleEffects = statusEffects.get(battle);
+        if (battleEffects == null) {
+            return;
+        }
+        List<StatusEffectState> effects = battleEffects.get(battler);
+        if (effects == null) {
+            return;
+        }
+        effects.removeIf(StatusEffectState::negative);
+        if (effects.isEmpty()) {
+            battleEffects.remove(battler);
+        }
+    }
+
     private void applyExplosiveTossBacklash(Battle battle, Battler actor, Attack attack, int totalDamage) {
-        int backlash = Math.max(1, totalDamage * 10 / 100);
+        int backlashPercent = ThreadLocalRandom.current().nextInt(0, 11);
+        int backlash = totalDamage * backlashPercent / 100;
         for (PlayerCharacter character : battle.getAlivePartyMembers()) {
             character.receiveDamage(backlash);
         }
@@ -362,7 +660,8 @@ public class BattleService {
                 attack.getName(),
                 "Party",
                 backlash,
-                "Explosive Toss backlash hits each party member for " + backlash + " damage."
+                "Explosive Toss backlash hits each party member for " + backlash + " damage ("
+                        + backlashPercent + "%)."
         ));
     }
 
@@ -380,7 +679,8 @@ public class BattleService {
                     )));
         }
         if (actor instanceof BossEnemy bossEnemy && actor.getName().equals("Hoarder")
-                && bossEnemy.getState().name().equals("PHASE_TWO")) {
+                && (bossEnemy.getState().name().equals("PHASE_TWO")
+                || bossEnemy.getState().name().equals("FINAL_PHASE"))) {
             spawnEnemyByName(battle, "Scatterer", MAX_SCATTERERS)
                     .ifPresent(spawned -> battle.addTurn(new BattleTurn(
                             battle.getTurnNumber(),
@@ -396,10 +696,17 @@ public class BattleService {
     private void applySpawnSpecial(Battle battle, Battler actor, Attack attack) {
         String spawnName = actor.getName().equals("Circe") ? "Mantis Nymph" : "Scatterer";
         int maxAlive = actor.getName().equals("Circe") ? MAX_NYMPHS : MAX_SCATTERERS;
-        Optional<Enemy> spawned = spawnEnemyByName(battle, spawnName, maxAlive);
-        String message = spawned
-                .map(enemy -> actor.getName() + " used " + attack.getName() + ". " + enemy.getName() + " joins the fight.")
-                .orElse(actor.getName() + " used " + attack.getName() + ", but no more " + spawnName + " can fit.");
+        int spawnAttempts = actor.getName().equals("Hoarder") && attack.getName().equals("Garbage Spawn")
+                ? ThreadLocalRandom.current().nextInt(1, 3)
+                : 1;
+        List<Enemy> spawnedEnemies = new ArrayList<>();
+        for (int i = 0; i < spawnAttempts; i++) {
+            spawnEnemyByName(battle, spawnName, maxAlive).ifPresent(spawnedEnemies::add);
+        }
+        String message = spawnedEnemies.isEmpty()
+                ? actor.getName() + " used " + attack.getName() + ", but no more " + spawnName + " can fit."
+                : actor.getName() + " used " + attack.getName() + ". " + spawnedEnemies.size()
+                        + " " + spawnName + (spawnedEnemies.size() == 1 ? " joins" : "s join") + " the fight.";
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),
                 actor.getName(),
@@ -449,33 +756,55 @@ public class BattleService {
     }
 
     private void applySummonGruulSpecial(Battle battle, Battler actor, Attack attack) {
-        int remaining = gruulCountdowns.getOrDefault(battle, 2) - 1;
-        gruulCountdowns.put(battle, remaining);
-        if (remaining <= 0) {
-            battle.getAlivePartyMembers().forEach(character -> character.receiveDamage(character.getMaxHp()));
-            battle.addTurn(new BattleTurn(
-                    battle.getTurnNumber(),
-                    actor.getName(),
-                    attack.getName(),
-                    "Party",
-                    0,
-                    "Summon Gruul completes. The party is destroyed."
-            ));
-            updateBattleResult(battle);
-            return;
-        }
+        gruulCountdowns.put(battle, 2);
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),
                 actor.getName(),
                 attack.getName(),
                 "Party",
                 0,
-                actor.getName() + " begins Summon Gruul. " + remaining + " turn remains."
+                actor.getName() + " begins Summon Gruul. The party has one Gore-Gore turn to stop it."
         ));
     }
 
+    private boolean advanceGruulRitualIfNeeded(Battle battle, Battler actor) {
+        if (!actor.getName().equals("Gore-Gore")) {
+            return false;
+        }
+        int remaining = gruulCountdowns.getOrDefault(battle, 0);
+        if (remaining <= 0) {
+            return false;
+        }
+        remaining--;
+        if (remaining <= 0) {
+            gruulCountdowns.remove(battle);
+            battle.getAlivePartyMembers().forEach(character -> character.receiveDamage(character.getMaxHp()));
+            battle.addTurn(new BattleTurn(
+                    battle.getTurnNumber(),
+                    actor.getName(),
+                    "Summon Gruul",
+                    "Party",
+                    0,
+                    "Summon Gruul completes. The party is destroyed."
+            ));
+            updateBattleResult(battle);
+            return true;
+        }
+        gruulCountdowns.put(battle, remaining);
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                actor.getName(),
+                "Summon Gruul",
+                "Party",
+                0,
+                "The Gruul ritual continues. It will complete on Gore-Gore's next turn."
+        ));
+        return false;
+    }
+
     private void applyHibernateSpecial(Battle battle, Battler actor, Attack attack) {
-        int healing = Math.max(1, actor.getMaxHp() * 30 / 100);
+        int healPercent = ThreadLocalRandom.current().nextInt(20, 31);
+        int healing = Math.max(1, actor.getMaxHp() * healPercent / 100);
         actor.heal(healing);
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),
@@ -483,7 +812,7 @@ public class BattleService {
                 attack.getName(),
                 actor.getName(),
                 healing,
-                actor.getName() + " hibernates and heals " + healing + " HP."
+                actor.getName() + " hibernates and heals " + healing + " HP (" + healPercent + "%)."
         ));
     }
 
@@ -536,38 +865,180 @@ public class BattleService {
         }
     }
 
-    private void applyStartOfTurnEffects(Battle battle, Battler actor) {
-        Map<Battler, StatusEffectState> battleEffects = statusEffects.get(battle);
-        if (battleEffects == null) {
-            return;
+    private boolean applyStartOfTurnEffects(Battle battle, Battler actor) {
+        applyNonStatusStartOfTurnEffects(battle, actor);
+        applyStatusTicks(battle, actor);
+        if (battle.isFinished() || !actor.isAlive()) {
+            return false;
         }
-        StatusEffectState effect = battleEffects.get(actor);
-        if (effect == null) {
-            return;
+        if (consumeStunIfPresent(battle, actor)) {
+            return true;
         }
-        actor.receiveDamage(effect.damage());
-        battle.addTurn(new BattleTurn(
-                battle.getTurnNumber(),
-                actor.getName(),
-                effect.name(),
-                actor.getName(),
-                effect.damage(),
-                actor.getName() + " takes " + effect.damage() + " " + effect.name() + " damage."
-        ));
-        if (effect.remainingTurns() <= 1 || !actor.isAlive()) {
-            battleEffects.remove(actor);
-        } else {
-            battleEffects.put(actor, effect.tick());
-        }
-        updateBattleResult(battle);
-        if (actor instanceof Enemy enemy) {
-            updateEnemyState(battle, enemy);
+        applyPlayerStartOfTurnPassives(battle, actor);
+        return false;
+    }
+
+    private void applyNonStatusStartOfTurnEffects(Battle battle, Battler actor) {
+        expirePartyShieldCreatedBy(battle, actor);
+    }
+
+    private void applyStatusTicks(Battle battle, Battler actor) {
+        Map<Battler, List<StatusEffectState>> battleEffects = statusEffects.get(battle);
+        List<StatusEffectState> actorEffects = battleEffects == null ? null : battleEffects.get(actor);
+        if (actorEffects != null && !actorEffects.isEmpty()) {
+            for (StatusEffectState effect : List.copyOf(actorEffects)) {
+                if (effect.lethal() || effect.name().equals("Stun")) {
+                    continue;
+                }
+                int tickAmount = rollStatusTickAmount(effect.baseAmount());
+                if (effect.lethal()) {
+                    tickAmount = actor.getCurrentHp();
+                    actor.receiveDamage(tickAmount);
+                } else if (effect.healing()) {
+                    actor.heal(tickAmount);
+                } else {
+                    actor.receiveDamage(tickAmount);
+                }
+                battle.addTurn(new BattleTurn(
+                        battle.getTurnNumber(),
+                        actor.getName(),
+                        effect.name(),
+                        actor.getName(),
+                        tickAmount,
+                        statusTickMessage(actor, effect, tickAmount)
+                ));
+                actorEffects.remove(effect);
+                if (effect.remainingTicks() > 1 && actor.isAlive()) {
+                    actorEffects.add(effect.tick());
+                }
+                if (!actor.isAlive()) {
+                    break;
+                }
+            }
+            if (actorEffects.isEmpty() || !actor.isAlive()) {
+                battleEffects.remove(actor);
+            }
+            updateBattleResult(battle);
+            if (actor instanceof Enemy enemy) {
+                updateEnemyState(battle, enemy);
+            }
         }
     }
 
-    private Optional<Attack> chooseFirstReadyAttack(Battler actor) {
+    private boolean consumeStunIfPresent(Battle battle, Battler actor) {
+        Map<Battler, List<StatusEffectState>> battleEffects = statusEffects.get(battle);
+        List<StatusEffectState> actorEffects = battleEffects == null ? null : battleEffects.get(actor);
+        if (actorEffects == null || actorEffects.stream().noneMatch(effect -> effect.name().equals("Stun"))) {
+            return false;
+        }
+        actorEffects.removeIf(effect -> effect.name().equals("Stun"));
+        if (actorEffects.isEmpty()) {
+            battleEffects.remove(actor);
+        }
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                actor.getName(),
+                "Stun",
+                actor.getName(),
+                0,
+                actor.getName() + " is stunned and loses the turn."
+        ));
+        return true;
+    }
+
+    private String statusTickMessage(Battler actor, StatusEffectState effect, int amount) {
+        if (effect.lethal()) {
+            return actor.getName() + " is killed by Lethal Infection.";
+        }
+        if (effect.healing()) {
+            return actor.getName() + " recovers " + amount + " HP from " + effect.name() + ".";
+        }
+        return actor.getName() + " takes " + amount + " " + effect.name() + " damage.";
+    }
+
+    private int rollStatusTickAmount(int baseAmount) {
+        if (baseAmount <= 0) {
+            return 0;
+        }
+        int percent = ThreadLocalRandom.current().nextInt(STATUS_TICK_MIN_PERCENT, STATUS_TICK_MAX_PERCENT + 1);
+        return Math.max(1, baseAmount * percent / 100);
+    }
+
+    private void applyPlayerStartOfTurnPassives(Battle battle, Battler actor) {
+        if (actor instanceof PlayerCharacter && actor.getName().equals("Donut")) {
+            applyRoyalCharm(battle, actor);
+        }
+    }
+
+    private void applyRoyalCharm(Battle battle, Battler actor) {
+        int donutTurn = donutTurnCounts.merge(battle, 1, Integer::sum);
+        if (donutTurn % 2 != 0) {
+            return;
+        }
+        List<Enemy> aliveEnemies = battle.getAliveEnemies();
+        if (aliveEnemies.isEmpty()) {
+            return;
+        }
+        Enemy target = aliveEnemies.get(ThreadLocalRandom.current().nextInt(aliveEnemies.size()));
+        donutCharmTargets.put(battle, target);
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                actor.getName(),
+                "Royal Charm",
+                target.getName(),
+                0,
+                "Royal Charm protects Donut from " + target.getName() + " for one turn."
+        ));
+    }
+
+    private Optional<Attack> chooseFirstReadyAttack(Battle battle, Battler actor) {
+        Optional<Attack> goreGoreRitualAttack = chooseGoreGoreRitualAttack(battle, actor);
+        if (goreGoreRitualAttack.isPresent()) {
+            return goreGoreRitualAttack;
+        }
+        Optional<Attack> heatherFinalPhaseAttack = chooseHeatherFinalPhaseAttack(actor);
+        if (heatherFinalPhaseAttack.isPresent()) {
+            return heatherFinalPhaseAttack;
+        }
         return actor.getAttacks().stream()
                 .filter(attack -> isUnlockedForActor(actor, attack))
+                .filter(attack -> isUsableForCurrentBattleState(battle, actor, attack))
+                .filter(attack -> isReady(actor, attack))
+                .findFirst();
+    }
+
+    private boolean isUsableForCurrentBattleState(Battle battle, Battler actor, Attack attack) {
+        if (actor.getName().equals("Hoarder") && attack.getName().equals("Devour")) {
+            return countAliveEnemiesByName(battle, "Scatterer") > 0;
+        }
+        if (actor.getName().equals("Gore-Gore") && attack.getName().equals("Summon Gruul")) {
+            return gruulCountdowns.getOrDefault(battle, 0) <= 0;
+        }
+        return true;
+    }
+
+    private Optional<Attack> chooseGoreGoreRitualAttack(Battle battle, Battler actor) {
+        if (!actor.getName().equals("Gore-Gore") || gruulCountdowns.getOrDefault(battle, 0) <= 0) {
+            return Optional.empty();
+        }
+        return findReadyAttackByName(actor, "Meat Hook")
+                .or(() -> findReadyAttackByName(actor, "Slash"));
+    }
+
+    private Optional<Attack> chooseHeatherFinalPhaseAttack(Battler actor) {
+        if (!(actor instanceof BossEnemy bossEnemy)
+                || !bossEnemy.getName().equals("Heather")
+                || bossEnemy.getState() != BossEnemyState.FINAL_PHASE) {
+            return Optional.empty();
+        }
+        return findReadyAttackByName(actor, "Hibernate")
+                .or(() -> findReadyAttackByName(actor, "Roller Skate Charge"))
+                .or(() -> findReadyAttackByName(actor, "Bear Maul"));
+    }
+
+    private Optional<Attack> findReadyAttackByName(Battler actor, String attackName) {
+        return actor.getAttacks().stream()
+                .filter(attack -> attack.getName().equals(attackName))
                 .filter(attack -> isReady(actor, attack))
                 .findFirst();
     }
@@ -586,20 +1057,11 @@ public class BattleService {
     }
 
     private void updateEnemyState(Battle battle, Enemy enemy) {
-        Optional<String> transition = Optional.empty();
         if (enemy instanceof BossEnemy bossEnemy) {
-            transition = new BossEnemyStateMachine(bossEnemy).update();
+            new BossEnemyStateMachine(bossEnemy).update();
         } else if (enemy instanceof TrashEnemy trashEnemy) {
-            transition = new TrashEnemyStateMachine(trashEnemy).update();
+            new TrashEnemyStateMachine(trashEnemy).update();
         }
-        transition.ifPresent(message -> battle.addTurn(new BattleTurn(
-                battle.getTurnNumber(),
-                enemy.getName(),
-                "FSM",
-                enemy.getName(),
-                0,
-                message
-        )));
     }
 
     private void startCooldown(Battler actor, Attack attack) {
@@ -662,11 +1124,14 @@ public class BattleService {
     }
 
     private boolean hasPartyShield(Battle battle) {
-        return partyShieldCharges.getOrDefault(battle, 0) > 0;
+        Battler source = partyShieldSources.get(battle);
+        return source != null && source.isAlive();
     }
 
-    private void consumePartyShield(Battle battle) {
-        partyShieldCharges.computeIfPresent(battle, (ignored, charges) -> Math.max(0, charges - 1));
+    private void expirePartyShieldCreatedBy(Battle battle, Battler actor) {
+        if (partyShieldSources.get(battle) == actor) {
+            partyShieldSources.remove(battle);
+        }
     }
 
     private int applyDamageModifiers(Battle battle, Battler actor, Attack attack, Targetable target, int damage,
@@ -677,6 +1142,9 @@ public class BattleService {
         }
         if (actorIsPlayer && partyDamageDebuffCharges.getOrDefault(battle, 0) > 0) {
             modifiedDamage /= 2;
+        }
+        if (actorIsPlayer && actor.getName().equals("Carl") && actor.getCurrentHp() * 100 < actor.getMaxHp() * 30) {
+            modifiedDamage += modifiedDamage * 20 / 100;
         }
         if (actorIsPlayer && target instanceof BossEnemy bossEnemy && bossEnemy.getName().equals("Denise")
                 && actor.getName().equals("Donut")) {
@@ -692,6 +1160,12 @@ public class BattleService {
                 && hasStatus(battle, battler, "Bleed")) {
             modifiedDamage += modifiedDamage * 20 / 100;
         }
+        if (!actorIsPlayer && actor instanceof TrashEnemy trashEnemy
+                && trashEnemy.getName().equals("Scatterer")
+                && trashEnemy.getState() == TrashEnemyState.AGGRESSIVE
+                && attack.getName().equals("Bug Bite")) {
+            modifiedDamage += modifiedDamage / 2;
+        }
         if (!actorIsPlayer && actor.getName().equals("Heather") && attack.getName().equals("Roller Skate Charge")) {
             int missingHpPercent = 100 - actor.getCurrentHp() * 100 / actor.getMaxHp();
             modifiedDamage += modifiedDamage * missingHpPercent / 100;
@@ -706,7 +1180,34 @@ public class BattleService {
                 && nymphDamageBoostCharges.getOrDefault(battle, 0) > 0) {
             modifiedDamage += modifiedDamage * 25 / 100;
         }
-        return Math.max(0, modifiedDamage);
+        return applyRoyalCharmDamageBlock(battle, actor, target, Math.max(0, modifiedDamage), actorIsPlayer);
+    }
+
+    private int applyRoyalCharmDamageBlock(Battle battle, Battler actor, Targetable target, int damage,
+                                           boolean actorIsPlayer) {
+        if (actorIsPlayer || damage <= 0 || !(target instanceof PlayerCharacter playerCharacter)) {
+            return damage;
+        }
+        Enemy charmedEnemy = donutCharmTargets.get(battle);
+        if (charmedEnemy != actor || !playerCharacter.getName().equals("Donut")) {
+            return damage;
+        }
+        battle.addTurn(new BattleTurn(
+                battle.getTurnNumber(),
+                "Donut",
+                "Royal Charm",
+                actor.getName(),
+                0,
+                "Royal Charm blocks " + actor.getName() + "'s damage to Donut."
+        ));
+        return 0;
+    }
+
+    private void expireRoyalCharmAfterEnemyTurn(Battle battle, Enemy actor) {
+        Enemy charmedEnemy = donutCharmTargets.get(battle);
+        if (charmedEnemy == actor) {
+            donutCharmTargets.remove(battle);
+        }
     }
 
     private void consumePartyDamageBuff(Battle battle) {
@@ -724,14 +1225,13 @@ public class BattleService {
     private boolean hasStatus(Battle battle, Battler battler, String statusName) {
         return Optional.ofNullable(statusEffects.get(battle))
                 .map(effects -> effects.get(battler))
-                .filter(effect -> effect.name().equals(statusName))
-                .isPresent();
+                .stream()
+                .flatMap(List::stream)
+                .anyMatch(effect -> effect.name().equals(statusName));
     }
 
     private Optional<Enemy> spawnEnemyByName(Battle battle, String name, int maxAlive) {
-        long aliveCount = battle.getAliveEnemies().stream()
-                .filter(enemy -> enemy.getName().equals(name))
-                .count();
+        long aliveCount = countAliveEnemiesByName(battle, name);
         if (aliveCount >= maxAlive) {
             return Optional.empty();
         }
@@ -744,6 +1244,12 @@ public class BattleService {
         Enemy spawned = copyEnemy(prototype.get());
         battle.addEnemy(spawned);
         return Optional.of(spawned);
+    }
+
+    private long countAliveEnemiesByName(Battle battle, String name) {
+        return battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals(name))
+                .count();
     }
 
     private Enemy copyEnemy(Enemy enemy) {
@@ -773,12 +1279,33 @@ public class BattleService {
         );
     }
 
-    private record DamageOutcome(int totalAmount, List<Enemy> damagedEnemies, List<? extends Targetable> targets) {
+    private record DamageOutcome(int totalAmount, List<Enemy> damagedEnemies, List<? extends Targetable> targets,
+                                 Map<Targetable, Integer> damageByTarget) {
+        private int damageFor(Targetable target) {
+            return damageByTarget.getOrDefault(target, 0);
+        }
     }
 
-    private record StatusEffectState(String name, int damage, int remainingTurns) {
+    private record StatusEffectState(String name, int baseAmount, int remainingTicks,
+                                     boolean healing, boolean lethal, boolean negative) {
+        private static StatusEffectState damage(String name, int baseDamage, int remainingTicks) {
+            return new StatusEffectState(name, baseDamage, remainingTicks, false, false, true);
+        }
+
+        private static StatusEffectState healing(String name, int baseHealing, int remainingTicks) {
+            return new StatusEffectState(name, baseHealing, remainingTicks, true, false, false);
+        }
+
+        private static StatusEffectState lethalInfection() {
+            return new StatusEffectState("Lethal Infection", 0, 1, false, true, true);
+        }
+
+        private static StatusEffectState stun() {
+            return new StatusEffectState("Stun", 0, 1, false, false, true);
+        }
+
         private StatusEffectState tick() {
-            return new StatusEffectState(name, damage, remainingTurns - 1);
+            return new StatusEffectState(name, baseAmount, remainingTicks - 1, healing, lethal, negative);
         }
     }
 }

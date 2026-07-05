@@ -14,8 +14,12 @@ import at.fhooe.ald.dao.jdbc.JdbcFloorDao;
 import at.fhooe.ald.dao.jdbc.JdbcHighScoreDao;
 import at.fhooe.ald.controller.GameController;
 import at.fhooe.ald.model.BattleResult;
+import at.fhooe.ald.model.Battler;
 import at.fhooe.ald.model.BossEnemy;
 import at.fhooe.ald.model.HighScore;
+import at.fhooe.ald.model.PlayerCharacter;
+import at.fhooe.ald.model.TargetType;
+import at.fhooe.ald.model.Targetable;
 import at.fhooe.ald.model.TrashEnemy;
 import at.fhooe.ald.model.fsm.BossEnemyState;
 import at.fhooe.ald.model.fsm.TrashEnemyState;
@@ -29,6 +33,7 @@ import at.fhooe.ald.service.HighScoreService;
 import at.fhooe.ald.service.TargetSelector;
 import java.nio.file.Files;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
 
@@ -47,7 +52,9 @@ class AppTest {
         assertEquals(3, testDaos.characterDao.findAvailableForFloor(3).size());
         assertEquals(6, testDaos.floorDao.findAll().size());
         assertEquals(3, testDaos.floorDao.findByNumber(1).orElseThrow().getEnemies().size());
-        assertFalse(testDaos.dialogueDao.findByFloorNumber(1).isEmpty());
+        for (int floorNumber = 1; floorNumber <= 6; floorNumber++) {
+            assertFalse(testDaos.dialogueDao.findByFloorNumber(floorNumber).isEmpty());
+        }
 
         testDaos.highScoreDao.save(new HighScore(0, "Test", 6, true, 42, LocalDateTime.now()));
 
@@ -122,6 +129,25 @@ class AppTest {
     }
 
     @Test
+    void turnPreviewStartsAtCurrentActorAndFollowsSpeedOrder() throws Exception {
+        var battle = createGameService().startNewGame();
+        var battleService = createBattleService();
+        var initialOrder = battle.getAliveActorsBySpeed().stream().map(Battler::getName).toList();
+
+        assertEquals(initialOrder,
+                battleService.getTurnPreview(battle, 5).stream().map(Battler::getName).toList());
+
+        var currentActor = (at.fhooe.ald.model.PlayerCharacter) battle.getCurrentActor().orElseThrow();
+        battleService.usePlayerAttack(battle, currentActor, currentActor.getAttacks().getFirst(),
+                battle.getAliveEnemies().getFirst());
+
+        assertEquals(initialOrder.get(1), battle.getCurrentActor().orElseThrow().getName());
+        assertEquals(List.of(initialOrder.get(1), initialOrder.get(2), initialOrder.get(3),
+                        initialOrder.get(4), initialOrder.get(0)),
+                battleService.getTurnPreview(battle, 5).stream().map(Battler::getName).toList());
+    }
+
+    @Test
     void battleServiceAppliesPlayerDamageAndLogsTurn() throws Exception {
         var battle = createGameService().startNewGame();
         var battleService = createBattleService();
@@ -186,13 +212,19 @@ class AppTest {
         var battleService = createBattleService();
         var donut = battle.getParty().get(1);
         var fireball = donut.getAttacks().get(1);
+        var magicMissile = donut.getAttacks().getFirst();
+        var hoarder = battle.getAliveEnemies().getFirst();
 
         battleService.usePlayerAttack(battle, donut, fireball);
 
         assertEquals(2, battleService.getRemainingCooldown(donut, fireball));
         assertThrows(IllegalStateException.class, () -> battleService.usePlayerAttack(battle, donut, fireball));
 
-        battleService.tickCooldowns(battle);
+        battleService.usePlayerAttack(battle, donut, magicMissile, hoarder);
+
+        assertEquals(1, battleService.getRemainingCooldown(donut, fireball));
+        assertThrows(IllegalStateException.class, () -> battleService.usePlayerAttack(battle, donut, fireball));
+
         battleService.tickCooldowns(battle);
 
         assertTrue(battleService.isReady(donut, fireball));
@@ -218,6 +250,35 @@ class AppTest {
     }
 
     @Test
+    void healingSongCleansesTargetAndAppliesHealingOverTime() throws Exception {
+        var battle = createBattleAtFloor(2);
+        var battleService = createBattleServiceTargetingFirstPartyMember();
+        var carl = battle.getParty().getFirst();
+        var donut = battle.getParty().get(1);
+        var ralph = battle.getAliveEnemies().getFirst();
+        var healingSong = donut.getAttacks().get(2);
+
+        battleService.performEnemyTurn(battle, ralph);
+        PlayerCharacter infectedTarget = battle.getAlivePartyMembers().stream()
+                .filter(character -> battleService.hasStatusEffect(battle, character, "Infection"))
+                .findFirst()
+                .orElseThrow();
+        infectedTarget.receiveDamage(Math.max(1, infectedTarget.getCurrentHp() - 1));
+        int hpBeforeHealingSong = infectedTarget.getCurrentHp();
+
+        battleService.usePlayerAttack(battle, donut, healingSong, infectedTarget);
+
+        assertFalse(battleService.hasStatusEffect(battle, infectedTarget, "Infection"));
+        assertTrue(battleService.hasStatusEffect(battle, infectedTarget, "Healing Song"));
+        assertTrue(infectedTarget.getCurrentHp() > hpBeforeHealingSong);
+
+        int hpBeforeHot = infectedTarget.getCurrentHp();
+        battleService.usePlayerAttack(battle, infectedTarget, infectedTarget.getAttacks().getFirst(), ralph);
+
+        assertTrue(infectedTarget.getCurrentHp() > hpBeforeHot);
+    }
+
+    @Test
     void protectiveShellBlocksNextEnemyAttack() throws Exception {
         var gameService = createGameService();
         gameService.startNewGame();
@@ -236,6 +297,57 @@ class AppTest {
     }
 
     @Test
+    void royalCharmExcludesDonutFromCharmedEnemyTargets() throws Exception {
+        var battle = createBattleAtFloor(2);
+        var battleService = createBattleService();
+        var carl = battle.getParty().getFirst();
+        var donut = battle.getParty().get(1);
+        var ralph = battle.getAliveEnemies().getFirst();
+        var magicMissile = donut.getAttacks().getFirst();
+        carl.receiveDamage(carl.getMaxHp());
+
+        battleService.usePlayerAttack(battle, donut, magicMissile, ralph);
+        int donutHpBefore = donut.getCurrentHp();
+        battleService.tickCooldowns(battle);
+        battleService.usePlayerAttack(battle, donut, magicMissile, ralph);
+
+        assertTrue(battle.getTurnLog().stream()
+                .anyMatch(turn -> turn.getMessage().contains("Royal Charm protects Donut from Ralph")));
+        assertTrue(battleService.hasRoyalCharm(battle, ralph));
+
+        battleService.performEnemyTurn(battle, ralph);
+
+        assertEquals(donutHpBefore, donut.getCurrentHp());
+        assertTrue(battle.getTurnLog().stream()
+                .anyMatch(turn -> turn.getMessage().contains("cannot find a valid target")));
+    }
+
+    @Test
+    void lethalInfectionKillsTargetOnNextTurnWhenNotDispelled() throws Exception {
+        var battle = createBattleAtFloor(2);
+        var battleService = createBattleServiceTargetingFirstPartyMember();
+        var carl = battle.getParty().getFirst();
+        var donut = battle.getParty().get(1);
+        var ralph = battle.getAliveEnemies().getFirst();
+        donut.receiveDamage(donut.getMaxHp());
+
+        battleService.performEnemyTurn(battle, ralph);
+        ralph.receiveDamage(900);
+        battleService.performEnemyTurn(battle, ralph);
+
+        PlayerCharacter infectedTarget = battle.getAlivePartyMembers().stream()
+                .filter(character -> battleService.hasStatusEffect(battle, character, "Lethal Infection"))
+                .findFirst()
+                .orElseThrow();
+        battleService.usePlayerAttack(battle, carl, carl.getAttacks().getFirst(), ralph);
+
+        assertTrue(infectedTarget.isAlive());
+        battleService.performEnemyTurn(battle, ralph);
+
+        assertFalse(infectedTarget.isAlive());
+    }
+
+    @Test
     void fireballBurnsEnemiesOnTheirTurn() throws Exception {
         var gameService = createGameService();
         gameService.startNewGame();
@@ -248,8 +360,18 @@ class AppTest {
         battleService.usePlayerAttack(battle, donut, fireball);
         int hpAfterFireball = ralph.getCurrentHp();
         battleService.performEnemyTurn(battle, ralph);
+        int hpAfterFirstBurnTick = ralph.getCurrentHp();
 
-        assertEquals(hpAfterFireball - 30, ralph.getCurrentHp());
+        int firstBurnTick = hpAfterFireball - hpAfterFirstBurnTick;
+        assertTrue(firstBurnTick >= 50);
+        assertTrue(firstBurnTick <= 96);
+        assertTrue(battleService.hasStatusEffect(battle, ralph, "Burn"));
+        battleService.performEnemyTurn(battle, ralph);
+        int secondBurnTick = hpAfterFirstBurnTick - ralph.getCurrentHp();
+
+        assertTrue(secondBurnTick >= 50);
+        assertTrue(secondBurnTick <= 96);
+        assertFalse(battleService.hasStatusEffect(battle, ralph, "Burn"));
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("Burn damage")));
     }
 
@@ -311,9 +433,11 @@ class AppTest {
 
         battleService.performEnemyTurn(battle, hoarder);
 
-        assertEquals(3, battle.getAliveEnemies().stream()
+        long scatterersAfterSpawn = battle.getAliveEnemies().stream()
                 .filter(enemy -> enemy.getName().equals("Scatterer"))
-                .count());
+                .count();
+        assertTrue(scatterersAfterSpawn >= 3);
+        assertTrue(scatterersAfterSpawn <= 4);
 
         hoarder.receiveDamage(1100);
         battleService.performEnemyTurn(battle, hoarder);
@@ -323,6 +447,56 @@ class AppTest {
                 .count());
         assertTrue(hoarder.getCurrentHp() > 300);
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("devours")));
+    }
+
+    @Test
+    void spawnedEnemiesDoNotGiveCurrentActorAnotherImmediateTurn() throws Exception {
+        var battle = createGameService().startNewGame();
+        var battleService = createBattleService();
+        var hoarder = (BossEnemy) battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Hoarder"))
+                .findFirst()
+                .orElseThrow();
+        while (battle.getCurrentActor().orElseThrow() != hoarder) {
+            battle.advanceTurn();
+        }
+        var orderBeforeSpawn = battle.getAliveActorsBySpeed();
+        String expectedNextActor = orderBeforeSpawn.get((orderBeforeSpawn.indexOf(hoarder) + 1)
+                % orderBeforeSpawn.size()).getName();
+
+        battleService.performEnemyTurn(battle, hoarder);
+
+        long scatterersAfterSpawn = battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Scatterer"))
+                .count();
+        assertTrue(scatterersAfterSpawn >= 3);
+        assertTrue(scatterersAfterSpawn <= 4);
+        assertEquals(expectedNextActor, battle.getCurrentActor().orElseThrow().getName());
+    }
+
+    @Test
+    void hoarderFinalPhaseSpawnsPassivelyBeforeDevour() throws Exception {
+        var battle = createGameService().startNewGame();
+        var battleService = createBattleService();
+        var hoarder = (BossEnemy) battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Hoarder"))
+                .findFirst()
+                .orElseThrow();
+        battleService.performEnemyTurn(battle, hoarder);
+        battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Scatterer"))
+                .forEach(enemy -> enemy.receiveDamage(enemy.getCurrentHp()));
+        hoarder.receiveDamage(1000);
+
+        battleService.performEnemyTurn(battle, hoarder);
+
+        assertTrue(battle.getTurnLog().stream()
+                .anyMatch(turn -> turn.getMessage().contains("Garbage Spawn passively creates a Scatterer")));
+        assertTrue(battle.getTurnLog().stream()
+                .anyMatch(turn -> turn.getMessage().contains("devours 1 Scatterers")));
+        assertEquals(0, battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Scatterer"))
+                .count());
     }
 
     @Test
@@ -341,6 +515,12 @@ class AppTest {
                 .count());
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("Brood Mother")));
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Twin Babies")));
+
+        battleService.performEnemyTurn(battle, circe);
+
+        assertEquals(4, battle.getAliveEnemies().stream()
+                .filter(enemy -> enemy.getName().equals("Mantis Nymph"))
+                .count());
     }
 
     @Test
@@ -352,6 +532,9 @@ class AppTest {
         battleService.performEnemyTurn(battle, goreGore);
         assertEquals(BattleResult.IN_PROGRESS, battle.getResult());
         goreGore.receiveDamage(1900);
+
+        battleService.performEnemyTurn(battle, goreGore);
+        assertEquals(BattleResult.IN_PROGRESS, battle.getResult());
 
         battleService.performEnemyTurn(battle, goreGore);
         assertEquals(BattleResult.IN_PROGRESS, battle.getResult());
@@ -405,7 +588,7 @@ class AppTest {
     }
 
     @Test
-    void bossFsmTransitionsAreLoggedAndUnlockPhaseAttacks() throws Exception {
+    void bossFsmTransitionsUnlockPhaseAttacksWithoutLogSpam() throws Exception {
         var battle = createGameService().startNewGame();
         var battleService = createBattleService();
         var hoarder = (BossEnemy) battle.getEnemies().stream()
@@ -416,19 +599,19 @@ class AppTest {
         battleService.performEnemyTurn(battle, hoarder);
 
         assertEquals(BossEnemyState.PHASE_ONE, hoarder.getState());
-        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("INTRO -> PHASE_ONE")));
+        assertFalse(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("FSM")));
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Garbage Spawn")));
 
         hoarder.receiveDamage(700);
         battleService.performEnemyTurn(battle, hoarder);
 
         assertEquals(BossEnemyState.PHASE_TWO, hoarder.getState());
-        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("PHASE_ONE -> PHASE_TWO")));
+        assertFalse(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("PHASE_ONE -> PHASE_TWO")));
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Pile Collapse")));
     }
 
     @Test
-    void trashFsmTransitionsAreLoggedAndUnlockStateAttacks() throws Exception {
+    void trashFsmTransitionsUnlockStateAttacksWithoutLogSpam() throws Exception {
         var battle = createGameService().startNewGame();
         var battleService = createBattleService();
         var scatterer = (TrashEnemy) battle.getEnemies().stream()
@@ -440,14 +623,14 @@ class AppTest {
         battleService.performEnemyTurn(battle, scatterer);
 
         assertEquals(TrashEnemyState.AGGRESSIVE, scatterer.getState());
-        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("NORMAL -> AGGRESSIVE")));
-        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Claw Jab")));
+        assertFalse(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("FSM")));
+        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Bug Bite")));
 
         scatterer.receiveDamage(30);
         battleService.performEnemyTurn(battle, scatterer);
 
         assertEquals(TrashEnemyState.DEAD, scatterer.getState());
-        assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("AGGRESSIVE -> DESPERATE")));
+        assertFalse(battle.getTurnLog().stream().anyMatch(turn -> turn.getMessage().contains("AGGRESSIVE -> DESPERATE")));
         assertTrue(battle.getTurnLog().stream().anyMatch(turn -> turn.getActionName().equals("Offering")));
     }
 
@@ -473,6 +656,20 @@ class AppTest {
 
     private BattleService createBattleService() {
         return new BattleService(new DamageCalculator(new Random(1)), new TargetSelector());
+    }
+
+    private BattleService createBattleServiceTargetingFirstPartyMember() {
+        return new BattleService(new DamageCalculator(new Random(1)), new TargetSelector() {
+            @Override
+            public List<? extends Targetable> selectTargets(at.fhooe.ald.model.Battle battle, TargetType targetType,
+                                                            boolean actorIsPlayer, Targetable selectedTarget) {
+                if (!actorIsPlayer
+                        && (targetType == TargetType.SINGLE_ENEMY || targetType == TargetType.RANDOM_ENEMY)) {
+                    return List.of(battle.getAlivePartyMembers().getFirst());
+                }
+                return super.selectTargets(battle, targetType, actorIsPlayer, selectedTarget);
+            }
+        });
     }
 
     private TestDaos createTestDaos() throws Exception {

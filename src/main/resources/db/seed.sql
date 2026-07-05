@@ -10,17 +10,17 @@ DELETE FROM characters;
 
 INSERT INTO characters (id, name, max_hp, speed, sprite_path, portrait_path, join_floor) VALUES
 (1, 'Carl', 600, 30, '/assets/sprites/party/carl_idle.png', '/assets/sprites/party/carl_portrait.png', 1),
-(2, 'Donut', 200, 55, '/assets/sprites/party/donut_idle.png', '/assets/sprites/party/donut_portrait.png', 1),
-(3, 'Mongo', 300, 45, '/assets/sprites/party/mongo_idle.png', '/assets/sprites/party/mongo_portrait.png', 3);
+(2, 'Donut', 200, 50, '/assets/sprites/party/donut_idle.png', '/assets/sprites/party/donut_portrait.png', 1),
+(3, 'Mongo', 300, 60, '/assets/sprites/party/mongo_idle.png', '/assets/sprites/party/mongo_portrait.png', 3);
 
 INSERT INTO attacks (id, name, description, min_damage, max_damage, target_type, effect, cooldown) VALUES
-(1, 'Roundhouse Kick', 'Single-target physical attack.', 40, 80, 'SINGLE_ENEMY', 'NONE', 0),
-(2, 'Explosive Toss', 'Strong multi-target attack that can hurt the party later.', 120, 200, 'ALL_ENEMIES', 'NONE', 0),
-(3, 'Protective Shell', 'Nullifies party damage for one turn.', 0, 0, 'ALL_ALLIES', 'SHIELD', 3),
-(4, 'Magic Missile', 'Ranged spell attack against one enemy.', 60, 100, 'SINGLE_ENEMY', 'NONE', 0),
+(1, 'Roundhouse Kick', 'Single-target physical attack.', 60, 120, 'SINGLE_ENEMY', 'NONE', 0),
+(2, 'Explosive Toss', 'Strong multi-target attack that can potentially hurt the party.', 200, 260, 'ALL_ENEMIES', 'NONE', 1),
+(3, 'Protective Shell', 'Nullifies party damage for one turn.', 0, 0, 'ALL_ALLIES', 'SHIELD', 4),
+(4, 'Magic Missile', 'Ranged spell attack against one enemy.', 90, 140, 'SINGLE_ENEMY', 'NONE', 1),
 (5, 'Fireball', 'Strong multi-target spell that leaves enemies burning.', 250, 320, 'ALL_ENEMIES', 'BURN', 2),
-(6, 'Healing Song', 'Heals each party member.', 40, 90, 'ALL_ALLIES', 'HEAL', 2),
-(7, 'Raptor Bite', 'Single-target bite attack.', 60, 80, 'SINGLE_ENEMY', 'NONE', 0),
+(6, 'Healing Song', 'Heals each party member and cleanses the direct target.', 120, 160, 'ALL_ALLIES', 'HEAL', 0),
+(7, 'Raptor Bite', 'Single-target bite attack.', 60, 80, 'SINGLE_ENEMY', 'BLEED', 0),
 (8, 'Gut Ripper', 'Damages one enemy and heals Mongo.', 80, 100, 'SINGLE_ENEMY', 'HEAL', 1),
 (9, 'Raptor Roar', 'Increases party damage for one turn.', 0, 0, 'ALL_ALLIES', 'BUFF_ATTACK', 3),
 (101, 'Garbage Spawn', 'Spawns one Scatterer.', 0, 0, 'SELF', 'SPAWN', 0),
@@ -29,9 +29,9 @@ INSERT INTO attacks (id, name, description, min_damage, max_damage, target_type,
 (104, 'Bug Bite', 'Weak single-target attack.', 20, 30, 'SINGLE_ENEMY', 'NONE', 0),
 (105, 'Claw Jab', 'Mediocre single-target attack.', 30, 40, 'SINGLE_ENEMY', 'NONE', 0),
 (106, 'Offering', 'Offers itself to the boss.', 0, 0, 'SINGLE_ALLY', 'HEAL', 0),
-(201, 'Rodent Bite', 'Basic single-target boss attack.', 40, 60, 'SINGLE_ENEMY', 'INFECTION', 0),
-(202, 'Rake', 'Stronger physical attack.', 100, 130, 'SINGLE_ENEMY', 'INFECTION', 0),
-(301, 'Bear Maul', 'Strong single-target physical attack.', 90, 130, 'SINGLE_ENEMY', 'NONE', 0),
+(201, 'Rodent Bite', 'Basic single-target boss attack that applies Pestilence.', 60, 90, 'SINGLE_ENEMY', 'INFECTION', 0),
+(202, 'Rake', 'Double physical attack that applies Pestilence.', 100, 130, 'SINGLE_ENEMY', 'INFECTION', 0),
+(301, 'Bear Maul', 'Strong single-target physical attack.', 90, 130, 'ALL_ENEMIES', 'BLEED', 0),
 (302, 'Roller Skate Charge', 'High-damage attack with stun chance.', 120, 180, 'SINGLE_ENEMY', 'STUN', 1),
 (303, 'Hibernate', 'Reduces damage and heals for two turns.', 0, 0, 'SELF', 'HEAL', 3),
 (401, 'Slash', 'Aggressive attack that can leave bleeding.', 100, 120, 'SINGLE_ENEMY', 'BLEED', 0),
@@ -53,17 +53,17 @@ INSERT INTO character_attacks (character_id, attack_id, slot) VALUES
 
 INSERT INTO enemies (id, name, enemy_type, max_hp, speed, sprite_path, passive_name, passive_description) VALUES
 (1, 'Hoarder', 'BOSS', 1400, 20, '/assets/sprites/bosses/hoarder_idle.png', 'Greedy Bulk', 'Takes less damage for each Scatterer alive.'),
-(2, 'Scatterer', 'TRASH', 100, 25, '/assets/sprites/enemies/scatterer_idle.png', 'None', ''),
-(3, 'Ralph', 'BOSS', 1200, 35, '/assets/sprites/bosses/ralph_idle.png', 'Pestilence', 'Direct attacks infect the target.'),
+(2, 'Scatterer', 'TRASH', 100, 40, '/assets/sprites/enemies/scatterer_idle.png', 'None', ''),
+(3, 'Ralph', 'BOSS', 1200, 60, '/assets/sprites/bosses/ralph_idle.png', 'Pestilence', 'Direct attacks poison the target. In final phase this becomes Lethal Infection.'),
 (4, 'Heather', 'BOSS', 2400, 40, '/assets/sprites/bosses/heather_idle.png', 'Acceleration', 'Missing HP makes her faster and stronger.'),
-(5, 'Gore-Gore', 'BOSS', 2600, 35, '/assets/sprites/bosses/gore_gore_idle.png', 'Blood Frenzy', 'Deals more damage to bleeding targets.'),
-(6, 'Denise', 'BOSS', 1800, 50, '/assets/sprites/bosses/denise_idle.png', 'Nothing-Touched Mother', 'Reduces incoming magic damage.'),
-(7, 'Circe', 'BOSS', 3000, 30, '/assets/sprites/bosses/circe_idle.png', 'Brood Mother', 'Spawns a Mantis Nymph at the start of her turns.'),
-(8, 'Mantis Nymph', 'TRASH', 120, 30, '/assets/sprites/enemies/mantis_nymph_idle.png', 'Fresh Hatchling', 'Low HP add spawned by Circe.');
+(5, 'Gore-Gore', 'BOSS', 2600, 30, '/assets/sprites/bosses/gore_gore_idle.png', 'Blood Frenzy', 'Deals more damage to bleeding targets.'),
+(6, 'Denise', 'BOSS', 1800, 40, '/assets/sprites/bosses/denise_idle.png', 'Nothing-Touched Mother', 'Reduces incoming magic damage.'),
+(7, 'Circe', 'BOSS', 3000, 70, '/assets/sprites/bosses/circe_idle.png', 'Brood Mother', 'Spawns a Mantis Nymph at the start of her turns.'),
+(8, 'Mantis Nymph', 'TRASH', 120, 60, '/assets/sprites/enemies/mantis_nymph_idle.png', 'Fresh Hatchling', 'Low HP add spawned by Circe.');
 
 INSERT INTO enemy_attacks (enemy_id, attack_id, slot, unlock_state) VALUES
 (1, 101, 1, 'PHASE_ONE'), (1, 102, 2, 'PHASE_TWO'), (1, 103, 3, 'FINAL_PHASE'),
-(2, 104, 1, 'NORMAL'), (2, 105, 2, 'AGGRESSIVE'), (2, 106, 3, 'DESPERATE'),
+(2, 104, 1, 'NORMAL'), (2, 104, 2, 'AGGRESSIVE'), (2, 106, 3, 'DESPERATE'),
 (3, 201, 1, 'PHASE_ONE'), (3, 202, 2, 'PHASE_TWO'), (3, 202, 3, 'FINAL_PHASE'),
 (4, 301, 1, 'PHASE_ONE'), (4, 302, 2, 'PHASE_TWO'), (4, 303, 3, 'FINAL_PHASE'),
 (5, 401, 1, 'PHASE_ONE'), (5, 402, 2, 'PHASE_TWO'), (5, 403, 3, 'FINAL_PHASE'),
@@ -74,10 +74,10 @@ INSERT INTO enemy_attacks (enemy_id, attack_id, slot, unlock_state) VALUES
 INSERT INTO floors (id, floor_number, name, background_path) VALUES
 (1, 1, 'Hoarder Den', '/assets/backgrounds/floors/floor_01_background.png'),
 (2, 2, 'Rat Nest', '/assets/backgrounds/floors/floor_02_background.png'),
-(3, 3, 'Skate Pit', '/assets/backgrounds/floors/floor_03_background.png'),
-(4, 4, 'Blood Arena', '/assets/backgrounds/floors/floor_04_background.png'),
+(3, 3, 'Grimaldi Circus', '/assets/backgrounds/floors/floor_03_background.png'),
+(4, 4, 'Subway Tangle', '/assets/backgrounds/floors/floor_04_background.png'),
 (5, 5, 'Mother''s Roost', '/assets/backgrounds/floors/floor_05_background.png'),
-(6, 6, 'Mantis Nursery', '/assets/backgrounds/floors/floor_06_background.png');
+(6, 6, 'Mantis Hive', '/assets/backgrounds/floors/floor_06_background.png');
 
 INSERT INTO floor_enemies (floor_id, enemy_id, quantity) VALUES
 (1, 1, 1), (1, 2, 2),
@@ -88,13 +88,9 @@ INSERT INTO floor_enemies (floor_id, enemy_id, quantity) VALUES
 (6, 7, 1), (6, 8, 2);
 
 INSERT INTO dialogue_lines (id, floor_number, speaker, text, display_order) VALUES
-(1, 1, 'Carl', 'This room smells like wet trash and bad decisions.', 1),
-(2, 1, 'Hoarder', 'Everything here belongs to me.', 2),
-(3, 2, 'Donut', 'Absolutely not. I refuse to be bitten by royalty-adjacent rodents.', 1),
-(4, 2, 'Ralph', 'Squeak.', 2),
-(5, 3, 'Mongo', 'Mongo joins the party.', 1),
-(6, 3, 'Heather', 'Try to keep up.', 2),
-(7, 4, 'Gore-Gore', 'Bleed for the arena.', 1),
-(8, 5, 'Denise', 'Honk.', 1),
-(9, 6, 'Circe', 'My children are hungry.', 1),
-(10, 6, 'Carl', 'Then let us make this quick.', 2);
+(1, 1, 'System AI', 'B-B-B-BOSSBATTLE! This room smells like wet trash and bad decisions. The encounter on this floor is the one and only disgusting Hoarder. Good luck noobs!', 1),
+(2, 2, 'System AI', 'B-B-B-BOSSBATTLE! Ralph is waiting in the Rat Nest, and he did not brush his teeth. If you ever wondered where the plague originated... it was this motherfucker!', 1),
+(3, 3, 'System AI', 'B-B-B-BOSSBATTLE! Welcome to the Circus. If you hate clowns, do not worry, we are not THIS crazy. In fact you are facing Heather the cursed undead ballerina bear. Playing dead does not work with this savage!', 1),
+(4, 4, 'System AI', 'B-B-B-BOSSBATTLE! Your train got cancelled. But you are lucky, Gore-Gore owns this stop, and every rail line ends in bleeding. Oh.. maybe you are the opposite of lucky lol.', 1),
+(5, 5, 'System AI', 'B-B-B-BOSSBATTLE! You like crispy duck? Murderer! Shame on you. Denise has entered the arena, and her honk is absolutely HONKING! Prepare to get rect you son of a beautiful woman.', 1),
+(6, 6, 'System AI', 'FINAL B-B-B-BOSSBATTLE!: You bastards made it this far?! Well your lucky strike is over, because Circe the brood mother is all violence and dominance. Having fun with this babe ends in decapitation!', 1);

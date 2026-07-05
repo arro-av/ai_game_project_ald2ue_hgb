@@ -24,6 +24,7 @@ public class EncounterService {
         return new Battle(
                 floor.getFloorNumber(),
                 floor.getName(),
+                floor.getBackgroundPath(),
                 characterDao.findAvailableForFloor(floorNumber),
                 floor.getEnemies(),
                 dialogueService.getIntroDialogue(floorNumber)
