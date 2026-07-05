@@ -468,7 +468,7 @@ public class BattleService {
     private void applyPostDamageEffect(Battle battle, Battler actor, Attack attack, DamageOutcome outcome,
                                        boolean actorIsPlayer) {
         switch (attack.getEffect()) {
-            case HEAL -> healActorAfterDamage(battle, actor, attack);
+            case HEAL -> healActorAfterDamage(battle, actor, attack, outcome);
             case BURN -> applyStatusToTargets(battle, actor, attack, outcome, "Burn");
             case BLEED -> applyStatusToTargets(battle, actor, attack, outcome, "Bleed");
             case INFECTION -> applyInfectionEffect(battle, actor, attack, outcome);
@@ -485,8 +485,13 @@ public class BattleService {
         }
     }
 
-    private void healActorAfterDamage(Battle battle, Battler actor, Attack attack) {
-        int healing = Math.max(1, actor.getMaxHp() / 10);
+    private void healActorAfterDamage(Battle battle, Battler actor, Attack attack, DamageOutcome outcome) {
+        int healing = attack.getName().equals("Gut Ripper")
+                ? outcome.totalAmount()
+                : Math.max(1, actor.getMaxHp() / 10);
+        if (healing <= 0) {
+            return;
+        }
         actor.heal(healing);
         battle.addTurn(new BattleTurn(
                 battle.getTurnNumber(),

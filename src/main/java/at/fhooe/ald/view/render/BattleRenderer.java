@@ -539,7 +539,7 @@ public class BattleRenderer {
         String text = "Pick an attack.";
         if (selectedAttack != null) {
             title = selectedAttack.getName();
-            text = selectedAttack.getDescription();
+            text = attackInfoText(selectedAttack);
         }
         graphics.setFont(Font.font("Consolas", 15));
         graphics.setFill(Color.rgb(242, 238, 220));
@@ -547,6 +547,41 @@ public class BattleRenderer {
         graphics.setFont(Font.font("Consolas", 13));
         graphics.setFill(Color.rgb(216, 200, 148));
         drawWrapped(graphics, text, x + 16, y + 52, panelWidth - 32, 18, 4);
+    }
+
+    private String attackInfoText(Attack attack) {
+        return shortDescription(attack) + System.lineSeparator()
+                + "Effect: " + effectDescription(attack) + System.lineSeparator()
+                + "DMG: " + damageRange(attack);
+    }
+
+    private String shortDescription(Attack attack) {
+        String description = attack.getDescription();
+        return description == null || description.isBlank() ? "No description." : description;
+    }
+
+    private String effectDescription(Attack attack) {
+        return switch (attack.getEffect()) {
+            case NONE -> "None";
+            case STUN -> "Chance to stun.";
+            case HEAL -> "Heals after use.";
+            case BUFF_ATTACK -> "Increases damage.";
+            case DEBUFF_DEFENSE -> "Lowers enemy defense.";
+            case SHIELD -> "Blocks party damage.";
+            case BURN -> "Applies burn.";
+            case BLEED -> "Applies bleed.";
+            case INFECTION -> "Applies infection.";
+            case SPAWN -> "Summons an add.";
+            case DEVOUR -> "Consumes adds to heal.";
+            case REFLECT -> "Reflects incoming damage.";
+        };
+    }
+
+    private String damageRange(Attack attack) {
+        if (attack.getMaxDamage() <= 0) {
+            return "none";
+        }
+        return attack.getMinDamage() + " - " + attack.getMaxDamage();
     }
 
     private double panelY(double canvasHeight) {

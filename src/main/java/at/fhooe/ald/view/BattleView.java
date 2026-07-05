@@ -4,20 +4,26 @@ import at.fhooe.ald.controller.GameController;
 import at.fhooe.ald.model.Attack;
 import at.fhooe.ald.model.Battle;
 import at.fhooe.ald.model.BattleResult;
+import at.fhooe.ald.model.BattleTurn;
 import at.fhooe.ald.model.Battler;
+import at.fhooe.ald.model.BossEnemy;
 import at.fhooe.ald.model.Enemy;
 import at.fhooe.ald.model.PlayerCharacter;
 import at.fhooe.ald.model.Targetable;
 import at.fhooe.ald.service.BattleService;
 import at.fhooe.ald.service.GameStatus;
+import at.fhooe.ald.service.audio.AudioCue;
+import at.fhooe.ald.service.audio.AudioManager;
 import at.fhooe.ald.view.render.BattleRenderResult;
 import at.fhooe.ald.view.render.BattleRenderer;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Queue;
+import java.util.Set;
 import javafx.animation.AnimationTimer;
 import javafx.beans.binding.Bindings;
 import javafx.geometry.Rectangle2D;
@@ -29,6 +35,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.TextAlignment;
+import javafx.util.Duration;
 
 public class BattleView extends StackPane {
     private static final double WIDTH = 1280;
@@ -39,12 +46,16 @@ public class BattleView extends StackPane {
     private static final long TITLE_FADE_NANOS = 850_000_000L;
     private static final long MONGO_JOIN_ANIMATION_NANOS = 1_000_000_000L;
     private static final long RENDER_STEP_NANOS = 33_000_000L;
+    private static final Duration INTRO_MUSIC_FADE_DURATION = Duration.millis(
+            (TITLE_FADE_NANOS * 2 + INTRO_HOLD_NANOS) / 1_000_000.0
+    );
 
     private final GameController gameController;
     private final BattleService battleService;
     private final BattleRenderer battleRenderer;
     private final Runnable onVictory;
     private final Runnable onGameOver;
+    private final AudioManager audioManager;
     private final Canvas canvas;
     private final List<Rectangle2D> attackAreas;
     private final List<Rectangle2D> targetAreas;
@@ -60,9 +71,11 @@ public class BattleView extends StackPane {
     private boolean enemyActionsPending;
     private boolean logSequencePlaying;
     private boolean gameOverPending;
+    private boolean victoryTransitionPending;
     private int visibleLogCharacters;
     private long lastTypewriterUpdate;
     private long messageCompletedAt;
+    private long victoryTransitionStartedAt;
     private double mouseX;
     private double mouseY;
     private boolean introSequenceActive;
@@ -78,12 +91,13 @@ public class BattleView extends StackPane {
     private double mongoJoinProgress;
 
     public BattleView(GameController gameController, BattleService battleService, BattleRenderer battleRenderer,
-                      Battle battle, Runnable onVictory, Runnable onGameOver) {
+                      Battle battle, Runnable onVictory, Runnable onGameOver, AudioManager audioManager) {
         this.gameController = gameController;
         this.battleService = battleService;
         this.battleRenderer = battleRenderer;
         this.onVictory = onVictory;
         this.onGameOver = onGameOver;
+        this.audioManager = audioManager;
         this.battle = battle;
         this.canvas = new Canvas(WIDTH, HEIGHT);
         this.attackAreas = new ArrayList<>();
@@ -96,6 +110,7 @@ public class BattleView extends StackPane {
         this.inputState = BattleInputState.INTRO_SEQUENCE;
         this.legalTargets = List.of();
         this.gameOverPending = false;
+        this.victoryTransitionPending = false;
         this.mouseX = Double.NaN;
         this.mouseY = Double.NaN;
         this.introSequenceActive = false;
@@ -126,6 +141,7 @@ public class BattleView extends StackPane {
         setFocusTraversable(true);
         setOnKeyPressed(event -> {
             if (event.getCode() == KeyCode.ENTER) {
+                audioManager.playSfx(AudioCue.UI_CLICK);
                 advanceInputFlow();
             }
         });
@@ -135,6 +151,7 @@ public class BattleView extends StackPane {
     }
 
     private void handleClick(double x, double y) {
+        audioManager.playSfx(AudioCue.UI_CLICK);
         requestFocus();
         if (introSequenceActive) {
             advanceIntroInput();
@@ -146,6 +163,7 @@ public class BattleView extends StackPane {
             return;
         }
         if (battle.isFinished()) {
+            victoryTransitionPending = false;
             handleFinishedBattleClick();
             return;
         }
@@ -226,6 +244,7 @@ public class BattleView extends StackPane {
             PlayerCharacter activeCharacter = activeCharacter();
             int logStart = battle.getTurnLog().size();
             BattleResult result = battleService.usePlayerAttack(battle, activeCharacter, selectedAttack, selectedTarget);
+            playTurnSounds(logStart);
             queueNewMessages(logStart);
             enemyActionsPending = result == BattleResult.IN_PROGRESS && isCurrentActorEnemy();
             inputState = BattleInputState.WAIT_FOR_CONFIRM;
@@ -245,6 +264,7 @@ public class BattleView extends StackPane {
         if (currentActor instanceof Enemy enemy) {
             int logStart = battle.getTurnLog().size();
             battleService.performEnemyTurn(battle, enemy);
+            playTurnSounds(logStart);
             queueNewMessages(logStart);
         }
         if (battle.getResult() == BattleResult.DEFEAT) {
@@ -289,10 +309,13 @@ public class BattleView extends StackPane {
 
     private void finishActionSequence() {
         if (battle.getResult() == BattleResult.VICTORY) {
+            audioManager.fadeOutMusic(INTRO_MUSIC_FADE_DURATION);
             statusMessage = gameController.getStatus() == GameStatus.VICTORY
                     ? "Victory. You cleared all six floors."
-                    : "Floor cleared. Click anywhere to continue.";
+                    : "Floor cleared. Preparing next floor.";
             inputState = BattleInputState.SELECT_ATTACK;
+            victoryTransitionPending = true;
+            victoryTransitionStartedAt = System.nanoTime();
         } else if (battle.getResult() == BattleResult.DEFEAT) {
             gameController.gameOver();
             showInteractiveMessage("Game Over. Return to the main menu later.");
@@ -330,6 +353,7 @@ public class BattleView extends StackPane {
         fullTitleMessage = "Floor " + battle.getFloorNumber() + ": " + battle.getFloorName();
         titleCompletedAt = 0;
         titleFadeStartedAt = System.nanoTime();
+        audioManager.fadeToBossMusic(bossNameForMusic(), INTRO_MUSIC_FADE_DURATION);
         titleOverlayAlpha = 1.0;
         titleTextAlpha = 0.0;
         mongoJoinMessageShown = battle.getFloorNumber() != 3;
@@ -542,6 +566,29 @@ public class BattleView extends StackPane {
         return battle.getFloorNumber() == 3 && mongoJoinMessageShown && !mongoJoinCompleted && mongoJoinStartedAt == 0;
     }
 
+    private String bossNameForMusic() {
+        return battle.getEnemies().stream()
+                .filter(BossEnemy.class::isInstance)
+                .findFirst()
+                .map(Enemy::getName)
+                .orElse("");
+    }
+
+    private void playTurnSounds(int logStart) {
+        Set<String> playedActionKeys = new HashSet<>();
+        battle.getTurnLog().stream()
+                .skip(logStart)
+                .filter(turn -> !turn.getActionName().isBlank())
+                .filter(turn -> shouldPlayActionSound(turn, playedActionKeys))
+                .map(BattleTurn::getActionName)
+                .forEach(audioManager::playAction);
+    }
+
+    private boolean shouldPlayActionSound(BattleTurn turn, Set<String> playedActionKeys) {
+        String key = turn.getTurnNumber() + "|" + turn.getActorName() + "|" + turn.getActionName();
+        return playedActionKeys.add(key);
+    }
+
     private void finishIntroSequence() {
         introSequenceActive = false;
         introPhase = IntroPhase.NONE;
@@ -654,6 +701,10 @@ public class BattleView extends StackPane {
                     gameOverPending = false;
                     renderTimer.stop();
                     onGameOver.run();
+                }
+                if (victoryTransitionPending && now - victoryTransitionStartedAt >= MESSAGE_HOLD_NANOS) {
+                    victoryTransitionPending = false;
+                    handleFinishedBattleClick();
                 }
             }
         };
