@@ -31,6 +31,7 @@ public class BattleRenderer {
     private static final double ENEMY_SPACING = 185.0;
     private static final double PANEL_MARGIN = 18.0;
     private static final double BOTTOM_PANEL_HEIGHT = 132.0;
+    private static final double BOTTOM_UI_BACKDROP_PADDING = 10.0;
     private static final double SPRITE_PANEL_GAP = 34.0;
     private static final double HP_BAR_WIDTH = 120.0;
     private static final double STATUS_ICON_SIZE = 22.0;
@@ -40,7 +41,9 @@ public class BattleRenderer {
     private static final double MELEE_EFFECT_SIZE = 384.0;
     private static final long EFFECT_ANIMATION_NANOS = 450_000_000L;
     private static final long HIT_FLASH_NANOS = 750_000_000L;
+    private static final long DASH_ANIMATION_NANOS = 450_000_000L;
     private static final int HIT_FLASH_COUNT = 3;
+    private static final double ROLLER_SKATE_DASH_DISTANCE = 230.0;
     private static final double TURN_PREVIEW_TOP = 10.0;
     private static final double TURN_PREVIEW_ACTIVE_SIZE = 45.0;
     private static final double TURN_PREVIEW_NEXT_SIZE = 39.0;
@@ -57,16 +60,26 @@ public class BattleRenderer {
     private static final String SKULL_ICON = "/assets/ui/icons/skull.png";
     private static final String STUN_ICON = "/assets/ui/icons/stun.png";
     private static final Map<String, String> ATTACK_EFFECT_SPRITES = Map.ofEntries(
+            Map.entry("Bear Maul", "/assets/sprites/effects/bear_maul.png"),
             Map.entry("Bug Bite", "/assets/sprites/effects/bug_bite.png"),
+            Map.entry("Bug Slash", "/assets/sprites/effects/slash.png"),
+            Map.entry("Decapitate", "/assets/sprites/effects/decapitate.png"),
             Map.entry("Explosive Toss", "/assets/sprites/effects/explosive_toss.png"),
             Map.entry("Fireball", "/assets/sprites/effects/fireball.png"),
+            Map.entry("Goose Bite", "/assets/sprites/effects/goose_bite.png"),
             Map.entry("Gut Ripper", "/assets/sprites/effects/gut_ripper.png"),
             Map.entry("Magic Missile", "/assets/sprites/effects/magic_missile.png"),
+            Map.entry("Meat Hook", "/assets/sprites/effects/meat_hook.png"),
+            Map.entry("Mother's Honk", "/assets/sprites/effects/mothers_honk.png"),
             Map.entry("Pile Collapse", "/assets/sprites/effects/pile_collapse.png"),
             Map.entry("Rake", "/assets/sprites/effects/rake.png"),
             Map.entry("Raptor Bite", "/assets/sprites/effects/raptor_bite.png"),
             Map.entry("Rodent Bite", "/assets/sprites/effects/rodent_bite.png"),
-            Map.entry("Roundhouse Kick", "/assets/sprites/effects/roundhouse_kick.png")
+            Map.entry("Roundhouse Kick", "/assets/sprites/effects/roundhouse_kick.png"),
+            Map.entry("Slash", "/assets/sprites/effects/slash.png"),
+            Map.entry("Summon Gruul", "/assets/sprites/effects/gruul.png"),
+            Map.entry("Swarm Bite", "/assets/sprites/effects/bug_bite.png"),
+            Map.entry("Wild Slash", "/assets/sprites/effects/slash.png")
     );
     private static final Map<String, String> TURN_PREVIEW_PORTRAITS = Map.ofEntries(
             Map.entry("carl", "/assets/ui/portraits/portrait_carl.png"),
@@ -100,6 +113,7 @@ public class BattleRenderer {
     private final Map<Battler, Double> deathOffsets;
     private final Map<Battler, Boolean> despawnedBattlers;
     private final Map<String, Long> hitFlashStartsByName;
+    private final Map<String, Long> dashStartsByName;
     private final List<EffectAnimation> effectAnimations;
     private int animatedTurnCount;
 
@@ -109,6 +123,7 @@ public class BattleRenderer {
         this.deathOffsets = new IdentityHashMap<>();
         this.despawnedBattlers = new IdentityHashMap<>();
         this.hitFlashStartsByName = new HashMap<>();
+        this.dashStartsByName = new HashMap<>();
         this.effectAnimations = new ArrayList<>();
         this.animatedTurnCount = 0;
     }
@@ -116,17 +131,20 @@ public class BattleRenderer {
     public BattleRenderResult render(GraphicsContext graphics, Battle battle, PlayerCharacter activeCharacter,
                                      Attack selectedAttack, List<? extends Targetable> legalTargets,
                                      BattleService battleService, String statusMessage, boolean attacksEnabled,
-                                     double hoverX, double hoverY, double width, double height) {
+                                     double hoverX, double hoverY, String entranceActorName, double entranceProgress,
+                                     double width, double height) {
         drawBackground(graphics, battle, width, height);
         drawTurnPreview(graphics, battleService.getTurnPreview(battle, 5), width);
         Map<Targetable, Rectangle2D> targetAreaByTarget = new IdentityHashMap<>();
         Map<String, List<Rectangle2D>> battlerAreasByName = new HashMap<>();
-        drawParty(graphics, battle, battleService, legalTargets, targetAreaByTarget, battlerAreasByName, height);
+        drawParty(graphics, battle, battleService, legalTargets, targetAreaByTarget, battlerAreasByName, height,
+                entranceActorName, entranceProgress);
         drawEnemies(graphics, battle, battleService, legalTargets, targetAreaByTarget, battlerAreasByName,
                 width, height);
         startAnimationsForNewTurns(battle, battlerAreasByName);
         drawEffectAnimations(graphics);
         drawHoveredTargetBox(graphics, targetAreaByTarget, legalTargets, hoverX, hoverY);
+        drawBottomUiBackdrop(graphics, width, height);
         List<Rectangle2D> attackAreas = drawActiveCharacterPanel(graphics, activeCharacter, battleService,
                 attacksEnabled, height);
         drawLogPanel(graphics, battle, statusMessage, height);
@@ -194,7 +212,7 @@ public class BattleRenderer {
             graphics.setFill(Color.rgb(8, 10, 14, 0.24));
             graphics.fillRect(0, 0, width, height);
             graphics.setFill(Color.rgb(8, 10, 14, 0.46));
-            graphics.fillRect(0, height * 0.80, width, height * 0.20);
+            graphics.fillRect(0, bottomUiBackdropY(height), width, height - bottomUiBackdropY(height));
             return;
         }
         graphics.setFill(Color.rgb(42, 46, 50));
@@ -202,12 +220,13 @@ public class BattleRenderer {
         graphics.setFill(Color.rgb(70, 66, 58));
         graphics.fillRect(0, height * 0.58, width, height * 0.22);
         graphics.setFill(Color.rgb(30, 32, 36));
-        graphics.fillRect(0, height * 0.80, width, height * 0.20);
+        graphics.fillRect(0, bottomUiBackdropY(height), width, height - bottomUiBackdropY(height));
     }
 
     private void drawParty(GraphicsContext graphics, Battle battle, BattleService battleService,
                            List<? extends Targetable> legalTargets, Map<Targetable, Rectangle2D> targetAreaByTarget,
-                           Map<String, List<Rectangle2D>> battlerAreasByName, double canvasHeight) {
+                           Map<String, List<Rectangle2D>> battlerAreasByName, double canvasHeight,
+                           String entranceActorName, double entranceProgress) {
         double spriteBottomY = battleSpriteBottomY(canvasHeight);
         double startX = 80;
         double targetAlpha = targetBlinkAlpha();
@@ -220,6 +239,9 @@ public class BattleRenderer {
             SpriteLayout layout = spriteLayout(character, PARTY_SPRITE_SIZE);
             double x = startX + i * PARTY_SPACING + layout.xOffset();
             double y = spriteBottomY - layout.height() + layout.yOffset();
+            if (character.getName().equals(entranceActorName)) {
+                x = entranceX(x, layout.width(), entranceProgress);
+            }
             double deathOffset = updateDeathOffset(character, y, layout.height(), graphics.getCanvas().getHeight());
             boolean legalTarget = isLegalTarget(character, legalTargets);
             double hitAlpha = hitFlashAlpha(character.getName());
@@ -235,6 +257,12 @@ public class BattleRenderer {
             hudRenderer.drawHpBar(graphics, character, hpBarX, hpBarY);
             drawStatusIcons(graphics, battle, battleService, character, hpBarX + HP_BAR_WIDTH + 8, hpBarY - 7);
         }
+    }
+
+    private double entranceX(double finalX, double width, double progress) {
+        double startX = -width - 80;
+        double easedProgress = 1.0 - Math.pow(1.0 - Math.max(0.0, Math.min(1.0, progress)), 3);
+        return startX + (finalX - startX) * easedProgress;
     }
 
     private void drawEnemies(GraphicsContext graphics, Battle battle, BattleService battleService,
@@ -260,13 +288,14 @@ public class BattleRenderer {
             double y = spriteBottomY - layout.height() + layout.yOffset()
                     - stackPosition.stackIndex() * ENEMY_STACK_Y_OFFSET;
             double deathOffset = updateDeathOffset(enemy, y, layout.height(), graphics.getCanvas().getHeight());
+            double dashOffset = dashOffset(enemy.getName());
             boolean legalTarget = isLegalTarget(enemy, legalTargets);
             double hitAlpha = hitFlashAlpha(enemy.getName());
-            drawBattler(graphics, enemy, x, y + deathOffset, layout.width(), layout.height(),
+            drawBattler(graphics, enemy, x + dashOffset, y + deathOffset, layout.width(), layout.height(),
                     Color.rgb(190, 90, 75), (legalTarget ? targetAlpha : 1.0) * hitAlpha);
-            Rectangle2D area = new Rectangle2D(x, y + deathOffset, layout.width(), layout.height());
+            Rectangle2D area = new Rectangle2D(x + dashOffset, y + deathOffset, layout.width(), layout.height());
             battlerAreasByName.computeIfAbsent(enemy.getName(), ignored -> new ArrayList<>()).add(area);
-            double hpBarX = x + Math.max(0, (layout.width() - HP_BAR_WIDTH) / 2);
+            double hpBarX = x + dashOffset + Math.max(0, (layout.width() - HP_BAR_WIDTH) / 2);
             double hpBarY = y + layout.height() + 12 + deathOffset;
             hudRenderer.drawHpBar(graphics, enemy, hpBarX, hpBarY);
             drawStatusIcons(graphics, battle, battleService, enemy, hpBarX + HP_BAR_WIDTH + 8, hpBarY - 7);
@@ -463,6 +492,18 @@ public class BattleRenderer {
         return areas;
     }
 
+    private void drawBottomUiBackdrop(GraphicsContext graphics, double width, double height) {
+        double x = PANEL_MARGIN - BOTTOM_UI_BACKDROP_PADDING;
+        double y = bottomUiBackdropY(height);
+        double backdropWidth = width - x * 2;
+        double backdropHeight = BOTTOM_PANEL_HEIGHT + BOTTOM_UI_BACKDROP_PADDING * 2;
+        graphics.setFill(Color.rgb(8, 10, 14, 0.72));
+        graphics.fillRect(x, y, backdropWidth, backdropHeight);
+        graphics.setStroke(Color.rgb(238, 226, 178, 0.28));
+        graphics.setLineWidth(2);
+        graphics.strokeRect(x, y, backdropWidth, backdropHeight);
+    }
+
     private void drawLogPanel(GraphicsContext graphics, Battle battle, String statusMessage, double height) {
         double panelWidth = 420;
         double panelHeight = BOTTOM_PANEL_HEIGHT;
@@ -510,6 +551,10 @@ public class BattleRenderer {
 
     private double panelY(double canvasHeight) {
         return canvasHeight - BOTTOM_PANEL_HEIGHT - PANEL_MARGIN;
+    }
+
+    private double bottomUiBackdropY(double canvasHeight) {
+        return panelY(canvasHeight) - BOTTOM_UI_BACKDROP_PADDING;
     }
 
     private double battleSpriteBottomY(double canvasHeight) {
@@ -605,6 +650,21 @@ public class BattleRenderer {
         return phase % 2 == 0 ? 0.30 : 1.0;
     }
 
+    private double dashOffset(String battlerName) {
+        Long startedAt = dashStartsByName.get(battlerName);
+        if (startedAt == null) {
+            return 0.0;
+        }
+        long elapsed = System.nanoTime() - startedAt;
+        if (elapsed >= DASH_ANIMATION_NANOS) {
+            dashStartsByName.remove(battlerName);
+            return 0.0;
+        }
+        double progress = elapsed / (double) DASH_ANIMATION_NANOS;
+        double wave = progress < 0.5 ? progress * 2.0 : (1.0 - progress) * 2.0;
+        return -ROLLER_SKATE_DASH_DISTANCE * wave;
+    }
+
     private void startAnimationsForNewTurns(Battle battle, Map<String, List<Rectangle2D>> battlerAreasByName) {
         List<BattleTurn> turns = battle.getTurnLog();
         if (animatedTurnCount > turns.size()) {
@@ -614,6 +674,13 @@ public class BattleRenderer {
         Set<String> animatedAttackKeys = new HashSet<>();
         for (int i = animatedTurnCount; i < turns.size(); i++) {
             BattleTurn turn = turns.get(i);
+            if (turn.getActionName().equals("Roller Skate Charge")) {
+                dashStartsByName.put(turn.getActorName(), now);
+            }
+            if (isGruulCompletion(turn)) {
+                startGruulCompletionAnimation(battle, turn, battlerAreasByName, animatedAttackKeys, now);
+                continue;
+            }
             if (turn.getAmount() <= 0 || turn.getTargetName().isBlank()) {
                 continue;
             }
@@ -639,6 +706,50 @@ public class BattleRenderer {
             effectAnimations.add(new EffectAnimation(spritePath, startX, startY, endX, endY, projectile, now));
         }
         animatedTurnCount = turns.size();
+    }
+
+    private boolean isGruulCompletion(BattleTurn turn) {
+        return turn.getActionName().equals("Summon Gruul")
+                && turn.getMessage().contains("completes");
+    }
+
+    private void startGruulCompletionAnimation(Battle battle, BattleTurn turn,
+                                               Map<String, List<Rectangle2D>> battlerAreasByName,
+                                               Set<String> animatedAttackKeys, long now) {
+        String spritePath = ATTACK_EFFECT_SPRITES.get(turn.getActionName());
+        Rectangle2D targetArea = partyArea(battle, battlerAreasByName);
+        if (spritePath == null || targetArea == null) {
+            return;
+        }
+        String attackKey = turn.getTurnNumber() + "|" + turn.getActorName() + "|" + turn.getActionName();
+        if (!animatedAttackKeys.add(attackKey)) {
+            return;
+        }
+        Rectangle2D actorArea = firstAreaFor(turn.getActorName(), battlerAreasByName);
+        double startX = actorArea == null ? centerX(targetArea) : centerX(actorArea);
+        double startY = actorArea == null ? centerY(targetArea) : centerY(actorArea);
+        effectAnimations.add(new EffectAnimation(spritePath, startX, startY,
+                centerX(targetArea), centerY(targetArea), true, now));
+    }
+
+    private Rectangle2D partyArea(Battle battle, Map<String, List<Rectangle2D>> battlerAreasByName) {
+        Rectangle2D combined = null;
+        for (PlayerCharacter character : battle.getParty()) {
+            Rectangle2D area = firstAreaFor(character.getName(), battlerAreasByName);
+            if (area == null) {
+                continue;
+            }
+            if (combined == null) {
+                combined = area;
+            } else {
+                double minX = Math.min(combined.getMinX(), area.getMinX());
+                double minY = Math.min(combined.getMinY(), area.getMinY());
+                double maxX = Math.max(combined.getMaxX(), area.getMaxX());
+                double maxY = Math.max(combined.getMaxY(), area.getMaxY());
+                combined = new Rectangle2D(minX, minY, maxX - minX, maxY - minY);
+            }
+        }
+        return combined;
     }
 
     private Rectangle2D firstAreaFor(String battlerName, Map<String, List<Rectangle2D>> battlerAreasByName) {

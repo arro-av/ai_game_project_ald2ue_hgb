@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Queue;
 import javafx.animation.AnimationTimer;
+import javafx.beans.binding.Bindings;
 import javafx.geometry.Rectangle2D;
 import javafx.geometry.VPos;
 import javafx.scene.canvas.Canvas;
@@ -36,6 +37,7 @@ public class BattleView extends StackPane {
     private static final long MESSAGE_HOLD_NANOS = 1_000_000_000L;
     private static final long INTRO_HOLD_NANOS = 2_000_000_000L;
     private static final long TITLE_FADE_NANOS = 850_000_000L;
+    private static final long MONGO_JOIN_ANIMATION_NANOS = 1_000_000_000L;
     private static final long RENDER_STEP_NANOS = 33_000_000L;
 
     private final GameController gameController;
@@ -70,6 +72,10 @@ public class BattleView extends StackPane {
     private long titleFadeStartedAt;
     private double titleOverlayAlpha;
     private double titleTextAlpha;
+    private boolean mongoJoinMessageShown;
+    private boolean mongoJoinCompleted;
+    private long mongoJoinStartedAt;
+    private double mongoJoinProgress;
 
     public BattleView(GameController gameController, BattleService battleService, BattleRenderer battleRenderer,
                       Battle battle, Runnable onVictory, Runnable onGameOver) {
@@ -97,8 +103,14 @@ public class BattleView extends StackPane {
         this.fullTitleMessage = "";
         this.titleOverlayAlpha = 0.0;
         this.titleTextAlpha = 0.0;
+        this.mongoJoinMessageShown = true;
+        this.mongoJoinCompleted = true;
+        this.mongoJoinStartedAt = 0;
+        this.mongoJoinProgress = 1.0;
 
         getChildren().add(canvas);
+        canvas.scaleXProperty().bind(Bindings.min(widthProperty().divide(WIDTH), heightProperty().divide(HEIGHT)));
+        canvas.scaleYProperty().bind(canvas.scaleXProperty());
         setStyle("-fx-background-color: #111318;");
         canvas.setOnMouseClicked(event -> handleClick(event.getX(), event.getY()));
         canvas.setOnMouseMoved(event -> {
@@ -320,6 +332,10 @@ public class BattleView extends StackPane {
         titleFadeStartedAt = System.nanoTime();
         titleOverlayAlpha = 1.0;
         titleTextAlpha = 0.0;
+        mongoJoinMessageShown = battle.getFloorNumber() != 3;
+        mongoJoinCompleted = battle.getFloorNumber() != 3;
+        mongoJoinStartedAt = 0;
+        mongoJoinProgress = mongoJoinCompleted ? 1.0 : 0.0;
         fullStatusMessage = "";
         statusMessage = null;
         visibleLogCharacters = 0;
@@ -337,6 +353,12 @@ public class BattleView extends StackPane {
         }
         if (introPhase == IntroPhase.DIALOGUE && isTypewriterRunning()) {
             revealFullMessage();
+            return;
+        }
+        if (introPhase == IntroPhase.MONGO_JOIN) {
+            mongoJoinProgress = 1.0;
+            mongoJoinCompleted = true;
+            finishIntroSequence();
         }
     }
 
@@ -476,6 +498,16 @@ public class BattleView extends StackPane {
                 && messageCompletedAt > 0
                 && now - messageCompletedAt >= INTRO_HOLD_NANOS) {
             playNextIntroMessageOrFinish();
+            return;
+        }
+        if (introPhase == IntroPhase.MONGO_JOIN) {
+            long elapsed = now - mongoJoinStartedAt;
+            mongoJoinProgress = Math.min(1.0, elapsed / (double) MONGO_JOIN_ANIMATION_NANOS);
+            if (elapsed >= MONGO_JOIN_ANIMATION_NANOS) {
+                mongoJoinProgress = 1.0;
+                mongoJoinCompleted = true;
+                finishIntroSequence();
+            }
         }
     }
 
@@ -486,7 +518,28 @@ public class BattleView extends StackPane {
             startTypewriterMessage(introMessage, false);
             return;
         }
+        if (shouldPlayMongoJoinMessage()) {
+            mongoJoinMessageShown = true;
+            introPhase = IntroPhase.DIALOGUE;
+            startTypewriterMessage("Mongo joined the party!", false);
+            return;
+        }
+        if (shouldStartMongoJoinAnimation()) {
+            introPhase = IntroPhase.MONGO_JOIN;
+            mongoJoinCompleted = false;
+            mongoJoinStartedAt = System.nanoTime();
+            mongoJoinProgress = 0.0;
+            return;
+        }
         finishIntroSequence();
+    }
+
+    private boolean shouldPlayMongoJoinMessage() {
+        return battle.getFloorNumber() == 3 && !mongoJoinMessageShown;
+    }
+
+    private boolean shouldStartMongoJoinAnimation() {
+        return battle.getFloorNumber() == 3 && mongoJoinMessageShown && !mongoJoinCompleted && mongoJoinStartedAt == 0;
     }
 
     private void finishIntroSequence() {
@@ -516,6 +569,8 @@ public class BattleView extends StackPane {
                 canUseAttackButtons(),
                 mouseX,
                 mouseY,
+                entranceActorName(),
+                entranceProgress(),
                 canvas.getWidth(),
                 canvas.getHeight()
         );
@@ -565,6 +620,20 @@ public class BattleView extends StackPane {
                 && (inputState == BattleInputState.SELECT_ATTACK || inputState == BattleInputState.SELECT_TARGET);
     }
 
+    private String entranceActorName() {
+        if (battle.getFloorNumber() == 3 && introSequenceActive && !mongoJoinCompleted) {
+            return "Mongo";
+        }
+        if (battle.getFloorNumber() == 3 && introPhase == IntroPhase.MONGO_JOIN) {
+            return "Mongo";
+        }
+        return "";
+    }
+
+    private double entranceProgress() {
+        return introPhase == IntroPhase.MONGO_JOIN ? mongoJoinProgress : 0.0;
+    }
+
     private AnimationTimer createRenderTimer() {
         return new AnimationTimer() {
             private long lastRender;
@@ -595,6 +664,7 @@ public class BattleView extends StackPane {
         TITLE_FADE_IN,
         TITLE_HOLD,
         TITLE_FADE_OUT,
-        DIALOGUE
+        DIALOGUE,
+        MONGO_JOIN
     }
 }
