@@ -1,4 +1,4 @@
-# Dungeon Crawler Carl - JavaFX Assignment Game
+# Dungeon Crawler - JavaFX Game
 
 This is a private university assignment project for the University of Applied Sciences Upper Austria, Campus Hagenberg. It was created for the A08 "Dungeons & Java" assignment.
 
@@ -40,7 +40,3 @@ On Unix-like systems:
 ```bash
 ./mvnw javafx:run
 ```
-
-## Notes
-
-The project is intentionally small in scope. It focuses on demonstrating object-oriented design, finite state machines, JavaFX rendering, and database-backed game data for the assignment.
